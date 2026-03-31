@@ -1,8 +1,9 @@
-from setuptools import find_packages, setup
 import os
 from glob import glob
 
-package_name = 'camera_web_streamer'
+from setuptools import find_packages, setup
+
+package_name = 'rc_car_bringup'
 
 setup(
     name=package_name,
@@ -21,14 +22,9 @@ setup(
     zip_safe=True,
     maintainer='jinwooseo',
     maintainer_email='jinwooseo@todo.todo',
-    description='ROS2 camera web streaming node with Flask MJPEG server',
+    description='Bringup launch files for RC car Visual SLAM project',
     license='MIT',
-    extras_require={
-        'test': ['pytest'],
-    },
     entry_points={
-        'console_scripts': [
-            'web_stream_node = camera_web_streamer.web_stream_node:main',
-        ],
+        'console_scripts': [],
     },
 )

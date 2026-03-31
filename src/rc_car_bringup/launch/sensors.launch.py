@@ -1,14 +1,15 @@
 """
-전체 센서 통합 launch 파일
+전체 센서 통합 launch 파일 (Phase 1–5)
 
 실행되는 노드:
     1. camera_ros (카메라 이미지 퍼블리시)
     2. mpu6050_node (IMU raw 데이터)
     3. imu_filter_madgwick (orientation 필터)
-    4. static TF: base_link → camera_link, camera_link → camera_optical_frame, base_link → imu_link
+    4. static TF: base_link → camera_link, camera_optical_frame, imu_link
+    5. encoder_node + odometry_node (휠 오도메트리)
 
 사용법:
-    ros2 launch mpu6050_driver sensors.launch.py
+    ros2 launch rc_car_bringup sensors.launch.py
 """
 
 import os
@@ -21,19 +22,21 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    pkg_dir = get_package_share_directory('mpu6050_driver')
+    bringup_dir = get_package_share_directory('rc_car_bringup')
+    imu_dir = get_package_share_directory('mpu6050_driver')
+    odom_dir = get_package_share_directory('wheel_odometry')
 
     # IMU 파이프라인 (mpu6050 + madgwick filter)
     imu_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(pkg_dir, 'launch', 'imu.launch.py')
+            os.path.join(imu_dir, 'launch', 'imu.launch.py')
         )
     )
 
     # Static TF (base_link → camera_link, imu_link)
     tf_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(pkg_dir, 'launch', 'sensor_tf.launch.py')
+            os.path.join(bringup_dir, 'launch', 'sensor_tf.launch.py')
         )
     )
 
@@ -50,8 +53,16 @@ def generate_launch_description():
         output='screen',
     )
 
+    # 휠 오도메트리 (encoder + odometry)
+    odom_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(odom_dir, 'launch', 'odometry.launch.py')
+        )
+    )
+
     return LaunchDescription([
         imu_launch,
         tf_launch,
         camera_node,
+        odom_launch,
     ])
