@@ -1,0 +1,19 @@
+# ROS2 build artifacts
+build/
+install/
+log/
+
+# Python artifacts
+**/__pycache__/
+**/*.pyc
+
+# OS generated files
+.DS_Store
+
+# Claude
+CLAUDE.md
+.claude/
+
+# Text file
+.pdf
+.gv
