@@ -7,6 +7,7 @@
     3. imu_filter_madgwick (orientation 필터)
     4. static TF: base_link → camera_link, camera_optical_frame, imu_link
     5. encoder_node + odometry_node (휠 오도메트리)
+    6. robot_localization EKF (/odom + /imu/data → /odometry/filtered)
 
 사용법:
     ros2 launch rc_car_bringup sensors.launch.py
@@ -54,9 +55,17 @@ def generate_launch_description():
     )
 
     # 휠 오도메트리 (encoder + odometry)
+    # publish_tf=False — TF는 EKF가 broadcast함
     odom_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(odom_dir, 'launch', 'odometry.launch.py')
+        )
+    )
+
+    # EKF 융합 (wheel odom + IMU → /odometry/filtered, odom→base_link TF)
+    ekf_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(bringup_dir, 'launch', 'ekf.launch.py')
         )
     )
 
@@ -65,4 +74,5 @@ def generate_launch_description():
         tf_launch,
         camera_node,
         odom_launch,
+        ekf_launch,
     ])

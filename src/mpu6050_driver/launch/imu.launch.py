@@ -16,7 +16,7 @@ def generate_launch_description():
                 'frame_id': 'imu_link',
                 'accel_range': 0,   # ±2g
                 'gyro_range': 0,    # ±250 °/s
-                'calibration_samples': 200,
+                'calibration_samples': 1000,
             }],
             output='screen',
         ),

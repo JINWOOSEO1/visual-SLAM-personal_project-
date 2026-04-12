@@ -19,6 +19,8 @@ Parameters:
   wheel_base     (float, default=0.150): 휠베이스 [m]
   odom_frame     (str,   default='odom')
   base_frame     (str,   default='base_link')
+  publish_tf     (bool,  default=False): odom→base_link TF broadcast 여부
+                                         (EKF 사용 시 False 권장)
 """
 
 import math
@@ -41,12 +43,14 @@ class OdometryNode(Node):
         self.declare_parameter('wheel_base',     0.150)  # m
         self.declare_parameter('odom_frame',     'odom')
         self.declare_parameter('base_frame',     'base_link')
+        self.declare_parameter('publish_tf',     False)
 
-        ppr         = self.get_parameter('pulses_per_rev').value
-        wheel_d     = self.get_parameter('wheel_diameter').value
-        self.wb     = self.get_parameter('wheel_base').value
-        self.odom_f = self.get_parameter('odom_frame').value
-        self.base_f = self.get_parameter('base_frame').value
+        ppr           = self.get_parameter('pulses_per_rev').value
+        wheel_d       = self.get_parameter('wheel_diameter').value
+        self.wb       = self.get_parameter('wheel_base').value
+        self.odom_f   = self.get_parameter('odom_frame').value
+        self.base_f   = self.get_parameter('base_frame').value
+        self.pub_tf   = self.get_parameter('publish_tf').value
 
         # 1 펄스당 이동 거리 [m]
         self.dist_per_tick = (math.pi * wheel_d) / ppr
@@ -64,13 +68,14 @@ class OdometryNode(Node):
 
         self._prev_left  = None   # 이전 틱 (첫 수신 전 None)
         self._prev_right = None
+        self._prev_time  = None
 
         self._last_left  = 0
         self._last_right = 0
 
         # ─── 퍼블리셔 / TF ───────────────────────────────────────
         self._odom_pub = self.create_publisher(Odometry, '/odom', 10)
-        self._tf_broadcaster = TransformBroadcaster(self)
+        self._tf_broadcaster = TransformBroadcaster(self) if self.pub_tf else None
 
         # ─── 서브스크라이버 ──────────────────────────────────────
         self.create_subscription(Int32, '/encoder/left_ticks',  self._cb_left,  10)
@@ -87,21 +92,28 @@ class OdometryNode(Node):
 
     # ─── 오도메트리 계산 ──────────────────────────────────────────
     def _update(self):
+        now_ros = self.get_clock().now()
+
         # 첫 수신 시 기준값 설정
         if self._prev_left is None:
             self._prev_left  = self._last_left
             self._prev_right = self._last_right
+            self._prev_time  = now_ros
             return
 
         # 구간 틱 차이
         d_left  = (self._last_left  - self._prev_left)  * self.dist_per_tick
         d_right = (self._last_right - self._prev_right) * self.dist_per_tick
 
+        dt = (now_ros - self._prev_time).nanoseconds * 1e-9
+
         self._prev_left  = self._last_left
         self._prev_right = self._last_right
+        self._prev_time  = now_ros
 
-        if d_left == 0.0 and d_right == 0.0:
+        if dt <= 0.0:
             return
+        # 정지 상태에서도 vx=0, vyaw=0을 EKF에 알려야 위치/yaw 드리프트가 잡힘
 
         # 차동구동 기구학
         d_center = (d_right + d_left) / 2.0
@@ -111,7 +123,10 @@ class OdometryNode(Node):
         self._x   += d_center * math.cos(self._yaw)
         self._y   += d_center * math.sin(self._yaw)
 
-        now = self.get_clock().now().to_msg()
+        vx     = d_center / dt
+        v_yaw  = d_yaw / dt
+
+        now = now_ros.to_msg()
 
         # ─── /odom 퍼블리시 ──────────────────────────────────────
         odom = Odometry()
@@ -126,18 +141,40 @@ class OdometryNode(Node):
         odom.pose.pose.orientation.z = math.sin(self._yaw / 2.0)
         odom.pose.pose.orientation.w = math.cos(self._yaw / 2.0)
 
+        # twist (base_link 기준)
+        odom.twist.twist.linear.x  = vx
+        odom.twist.twist.angular.z = v_yaw
+
+        # covariance — EKF 입력용 (pose는 드리프트하므로 크게, twist는 상대적으로 작게)
+        # 대각성분만 채움: [x, y, z, roll, pitch, yaw]
+        LARGE = 1e6  # 사용 안 하는 축
+        odom.pose.covariance[0]  = 0.05     # x
+        odom.pose.covariance[7]  = 0.05     # y
+        odom.pose.covariance[14] = LARGE    # z (미사용)
+        odom.pose.covariance[21] = LARGE    # roll (미사용)
+        odom.pose.covariance[28] = LARGE    # pitch (미사용)
+        odom.pose.covariance[35] = 0.10     # yaw
+
+        odom.twist.covariance[0]  = 0.01    # vx
+        odom.twist.covariance[7]  = 0.001   # vy=0 (비홀로노믹 제약)
+        odom.twist.covariance[14] = LARGE   # vz
+        odom.twist.covariance[21] = LARGE   # v_roll
+        odom.twist.covariance[28] = LARGE   # v_pitch
+        odom.twist.covariance[35] = 0.005   # v_yaw (IMU bias drift 보완)
+
         self._odom_pub.publish(odom)
 
-        # ─── TF 브로드캐스트 ─────────────────────────────────────
-        tf = TransformStamped()
-        tf.header.stamp    = now
-        tf.header.frame_id = self.odom_f
-        tf.child_frame_id  = self.base_f
-        tf.transform.translation.x = self._x
-        tf.transform.translation.y = self._y
-        tf.transform.rotation.z    = math.sin(self._yaw / 2.0)
-        tf.transform.rotation.w    = math.cos(self._yaw / 2.0)
-        self._tf_broadcaster.sendTransform(tf)
+        # ─── TF 브로드캐스트 (EKF 미사용 시만) ─────────────────
+        if self._tf_broadcaster is not None:
+            tf = TransformStamped()
+            tf.header.stamp    = now
+            tf.header.frame_id = self.odom_f
+            tf.child_frame_id  = self.base_f
+            tf.transform.translation.x = self._x
+            tf.transform.translation.y = self._y
+            tf.transform.rotation.z    = math.sin(self._yaw / 2.0)
+            tf.transform.rotation.w    = math.cos(self._yaw / 2.0)
+            self._tf_broadcaster.sendTransform(tf)
 
 
 def main(args=None):

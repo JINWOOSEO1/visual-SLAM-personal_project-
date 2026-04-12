@@ -98,26 +98,45 @@ class Mpu6050Node(Node):
         return vals
 
     def _calibrate(self, samples):
-        gx_sum = gy_sum = gz_sum = 0.0
-        ax_sum = ay_sum = az_sum = 0.0
-        for _ in range(samples):
-            ax, ay, az, _, gx, gy, gz = self._read_raw_data()
-            ax_sum += ax / self._accel_scale * _GRAVITY
-            ay_sum += ay / self._accel_scale * _GRAVITY
-            az_sum += az / self._accel_scale * _GRAVITY
-            gx_sum += gx / self._gyro_scale * _DEG_TO_RAD
-            gy_sum += gy / self._gyro_scale * _DEG_TO_RAD
-            gz_sum += gz / self._gyro_scale * _DEG_TO_RAD
+        # Warmup: 센서 settling을 위해 첫 100샘플 폐기
+        for _ in range(100):
+            self._read_raw_data()
             time.sleep(0.005)
 
-        self._gyro_bias[0] = gx_sum / samples
-        self._gyro_bias[1] = gy_sum / samples
-        self._gyro_bias[2] = gz_sum / samples
-        # 가속도는 중력 성분을 유지해야 하므로 바이어스만 보정하지 않음
-        # 대신 나중에 필요시 사용할 수 있도록 저장
-        self._accel_bias[0] = ax_sum / samples
-        self._accel_bias[1] = ay_sum / samples
-        self._accel_bias[2] = az_sum / samples
+        gyro = [[], [], []]
+        accel = [[], [], []]
+        for _ in range(samples):
+            ax, ay, az, _, gx, gy, gz = self._read_raw_data()
+            accel[0].append(ax / self._accel_scale * _GRAVITY)
+            accel[1].append(ay / self._accel_scale * _GRAVITY)
+            accel[2].append(az / self._accel_scale * _GRAVITY)
+            gyro[0].append(gx / self._gyro_scale * _DEG_TO_RAD)
+            gyro[1].append(gy / self._gyro_scale * _DEG_TO_RAD)
+            gyro[2].append(gz / self._gyro_scale * _DEG_TO_RAD)
+            time.sleep(0.005)
+
+        def mean(v):
+            return sum(v) / len(v)
+
+        def std(v, m):
+            return (sum((x - m) ** 2 for x in v) / len(v)) ** 0.5
+
+        for i in range(3):
+            self._gyro_bias[i] = mean(gyro[i])
+            self._accel_bias[i] = mean(accel[i])
+
+        # 정지 상태 검증: gyro std > 0.01 rad/s면 흔들렸다는 뜻
+        gyro_std = [std(gyro[i], self._gyro_bias[i]) for i in range(3)]
+        max_std = max(gyro_std)
+        if max_std > 0.01:
+            self.get_logger().warn(
+                f'Sensor was NOT still during calibration (max gyro std={max_std:.4f} rad/s). '
+                f'Bias estimate may be inaccurate — restart node with sensor stationary.'
+            )
+        else:
+            self.get_logger().info(
+                f'Stationary check OK (gyro std=[{gyro_std[0]:.5f}, {gyro_std[1]:.5f}, {gyro_std[2]:.5f}] rad/s)'
+            )
 
     def _timer_callback(self):
         try:
