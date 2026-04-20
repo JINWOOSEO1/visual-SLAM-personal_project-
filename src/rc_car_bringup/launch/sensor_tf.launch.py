@@ -43,10 +43,12 @@ def generate_launch_description():
         ],
     )
 
-    # camera_link → camera_optical_frame
+    # camera_link → camera (optical frame)
     # ROS 카메라 광학 프레임 규칙: z 전방, x 우측, y 하방
     # camera_link(x전방,y좌,z상) → optical(z전방,x우,y하)
     # 회전: roll=-π/2, yaw=-π/2
+    # child-frame-id 는 camera_ros 노드가 이미지 헤더에 박는 frame_id ('camera') 와 일치시켜야
+    # rtabmap 이 TF lookup 가능. (기존 'camera_optical_frame' → 'camera' 로 변경)
     camera_to_optical = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
@@ -59,7 +61,7 @@ def generate_launch_description():
             '--pitch', '0.0',
             '--yaw', '-1.5707963',    # -π/2
             '--frame-id', 'camera_link',
-            '--child-frame-id', 'camera_optical_frame',
+            '--child-frame-id', 'camera',
         ],
     )
 
