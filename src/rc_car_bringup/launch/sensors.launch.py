@@ -26,6 +26,7 @@ def generate_launch_description():
     bringup_dir = get_package_share_directory('rc_car_bringup')
     imu_dir = get_package_share_directory('mpu6050_driver')
     odom_dir = get_package_share_directory('wheel_odometry')
+    motor_dir = get_package_share_directory('motor_controller')
 
     # IMU 파이프라인 (mpu6050 + madgwick filter)
     imu_launch = IncludeLaunchDescription(
@@ -69,10 +70,18 @@ def generate_launch_description():
         )
     )
 
+    # 모터 드라이버 (/cmd_vel → GPIO PWM)
+    motor_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(motor_dir, 'launch', 'motor.launch.py')
+        )
+    )
+
     return LaunchDescription([
         imu_launch,
         tf_launch,
         camera_node,
         odom_launch,
         ekf_launch,
+        motor_launch,
     ])

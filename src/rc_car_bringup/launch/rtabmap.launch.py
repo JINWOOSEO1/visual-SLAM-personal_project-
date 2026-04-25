@@ -67,6 +67,9 @@ def generate_launch_description():
         'database_path': database_path,
         'Mem/IncrementalMemory': 'true',
         'Mem/InitWMWithAllNodes': 'false',
+        # features=0 인 불량 키프레임을 DB 에 저장하지 않고 버림
+        # → old=0 으로 인한 루프클로저 무한 거절 방지
+        'Mem/BadSignaturesIgnored': 'true',
 
         # ── 평면 주행 (2D SLAM) ─────────────────────────────────
         'Reg/Force3DoF': 'true',
@@ -79,6 +82,8 @@ def generate_launch_description():
         'Vis/MinInliers': '15',
         'Vis/InlierDistance': '0.1',
         'Vis/MaxFeatures': '600',
+        # ORB 과 동일 feature type 으로 맞춰 Mem/UseOdomFeatures 불일치 해소
+        'Vis/FeatureType': '8',             # 8 = ORB
 
         # ── 검출/루프클로저 주기 (RPi 부담 ↓, PC 측이지만 보수적) ──
         'Rtabmap/DetectionRate': '1.0',     # Hz
@@ -87,9 +92,9 @@ def generate_launch_description():
         'RGBD/AngularUpdate': '0.05',       # rad
         'RGBD/LinearUpdate': '0.05',        # m
 
-        # ── 특징점 ────────────────────────────────────────────
+        # ── 특징점: ORB 명시 (xfeatures2d 없는 환경에서 BRIEF 대체) ──
         'Kp/MaxFeatures': '400',
-        'Kp/DetectorStrategy': '6',         # 6 = GFTT/BRIEF (가벼움)
+        'Kp/DetectorStrategy': '8',         # 8 = ORB (BRIEF 대신 명시)
     }
 
     # Wi-Fi 대역폭 절감: Pi 가 보내는 /camera/image_raw/compressed 를
