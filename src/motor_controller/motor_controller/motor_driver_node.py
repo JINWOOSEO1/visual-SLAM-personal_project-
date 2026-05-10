@@ -47,7 +47,7 @@ class MotorDriverNode(Node):
 
         # 속도 제한 (SLAM 맵핑 중에는 느리게)
         self.declare_parameter('max_linear_speed',  0.3)     # m/s
-        self.declare_parameter('max_angular_speed', 1.5)     # rad/s
+        self.declare_parameter('max_angular_speed', 2.5)     # rad/s
 
         # PWM
         self.declare_parameter('pwm_frequency', 1000.0)      # Hz
