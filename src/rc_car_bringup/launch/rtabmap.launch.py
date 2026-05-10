@@ -71,8 +71,6 @@ def generate_launch_description():
         'Mem/BadSignaturesIgnored': 'true',
         # feature descriptor 를 LTM 이동 후에도 보존 (old=0 근본 원인 차단)
         'Mem/BinDataKept': 'true',
-        # feature=0 인 노드를 키프레임으로 저장하지 않음 (1 이상만 허용)
-        'Kp/MinInliers': '1',
 
         # ── 평면 주행 (2D SLAM) ─────────────────────────────────
         'Reg/Force3DoF': 'true',
@@ -90,13 +88,13 @@ def generate_launch_description():
 
         # ── 단안 depth 추정 (Occupancy Grid 생성용) ──────────────
         # monocular triangulation 으로 sparse depth map 생성
-        'gen_depth': 'true',
-        'gen_depth_decimation': '4',        # 연산 부하 감소
+        'gen_depth': True,
+        'gen_depth_decimation': 4,          # 연산 부하 감소
 
         # ── 검출/루프클로저 주기 (RPi 부담 ↓, PC 측이지만 보수적) ──
         'Rtabmap/DetectionRate': '1.0',     # Hz
         'RGBD/NeighborLinkRefining': 'true',
-        'RGBD/ProximityBySpace': 'true',
+        'RGBD/ProximityBySpace': 'false',
         'RGBD/AngularUpdate': '0.05',       # rad
         'RGBD/LinearUpdate': '0.05',        # m
 
