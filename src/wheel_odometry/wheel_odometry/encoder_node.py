@@ -28,7 +28,7 @@ class EncoderNode(Node):
         # ─── 파라미터 ────────────────────────────────────────────
         self.declare_parameter('left_pin',    17)
         self.declare_parameter('right_pin',   16)
-        self.declare_parameter('edge_mode',   'rising')   # 'rising' or 'both'
+        self.declare_parameter('edge_mode',   'both')   # 'rising' or 'both'
         self.declare_parameter('publish_rate', 50.0)
 
         self.left_pin    = self.get_parameter('left_pin').value

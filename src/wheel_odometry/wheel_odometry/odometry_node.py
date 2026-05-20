@@ -38,7 +38,7 @@ class OdometryNode(Node):
         super().__init__('odometry_node')
 
         # ─── 파라미터 ────────────────────────────────────────────
-        self.declare_parameter('pulses_per_rev', 20.0)   # ← 검증 후 수정
+        self.declare_parameter('pulses_per_rev', 40.0)   # rising + falling
         self.declare_parameter('wheel_diameter', 0.065)  # m
         self.declare_parameter('wheel_base',     0.150)  # m
         self.declare_parameter('odom_frame',     'odom')

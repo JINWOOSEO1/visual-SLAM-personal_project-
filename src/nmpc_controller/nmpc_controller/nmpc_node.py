@@ -11,6 +11,9 @@ Reference index tracking (monotonic):
 """
 
 import math
+import time
+from collections import deque
+
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -89,6 +92,10 @@ class NMPCNode(Node):
         self._ref_idx        = 0      # monotonic reference index a
         self._finished       = False
 
+        # Diagnostics — rolling windows for NMPC solve time and odom latency
+        self._solve_ms_window  = deque(maxlen=200)
+        self._odom_lat_ms_window = deque(maxlen=200)
+
         # ROS interfaces
         self.create_subscription(Odometry, '/odometry/filtered', self._cb_odom, 10)
         self._cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
@@ -106,8 +113,16 @@ class NMPCNode(Node):
         qw = msg.pose.pose.orientation.w
         theta = 2.0 * math.atan2(qz, qw)
 
+        now = self.get_clock().now()
         self._current_state  = np.array([x, y, theta])
-        self._last_odom_time = self.get_clock().now()
+        self._last_odom_time = now
+
+        # Latency = (receive time on this host) - (header.stamp set by publisher)
+        # Meaningful only if clocks of publisher and this host are NTP-synced.
+        stamp_ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+        if stamp_ns > 0:
+            lat_ms = (now.nanoseconds - stamp_ns) / 1e6
+            self._odom_lat_ms_window.append(lat_ms)
 
     # ------------------------------------------------------------------
     def _advance_ref_idx(self, pos: np.ndarray):
@@ -176,8 +191,11 @@ class NMPCNode(Node):
         # Extract reference segment
         ref_seg = self._get_ref_segment()   # (N+1, 3)
 
-        # Solve NMPC
+        # Solve NMPC — measure wall-clock time for one optimization step
+        t_solve_start = time.perf_counter()
         u_opt, s_opt, success = self._solver.solve(self._current_state, ref_seg)
+        solve_ms = (time.perf_counter() - t_solve_start) * 1000.0
+        self._solve_ms_window.append(solve_ms)
 
         if not success:
             self.get_logger().warn(
@@ -190,12 +208,24 @@ class NMPCNode(Node):
         twist.angular.z = float(u_opt[0, 1])
         self._cmd_pub.publish(twist)
 
+        # Rolling stats for diagnostics
+        sw = np.asarray(self._solve_ms_window)
+        solve_stat = (f'solve {solve_ms:6.1f}ms '
+                      f'(avg {sw.mean():5.1f} p95 {np.percentile(sw, 95):5.1f} '
+                      f'max {sw.max():5.1f})')
+        if len(self._odom_lat_ms_window) > 0:
+            lw = np.asarray(self._odom_lat_ms_window)
+            odom_stat = (f'odom_lat avg {lw.mean():5.1f}ms p95 {np.percentile(lw, 95):5.1f} '
+                         f'max {lw.max():5.1f}')
+        else:
+            odom_stat = 'odom_lat n/a'
+
         self.get_logger().info(
             f'[NMPC] idx={self._ref_idx}/{self._T} '
             f'pos=[{pos[0]:.2f},{pos[1]:.2f}] '
             f'theta={math.degrees(self._current_state[2]):.1f}deg '
             f'cmd=[v={twist.linear.x:.3f} w={twist.angular.z:.3f}] '
-            f'ok={success}',
+            f'ok={success} | {solve_stat} | {odom_stat}',
             throttle_duration_sec=1.0,
         )
 

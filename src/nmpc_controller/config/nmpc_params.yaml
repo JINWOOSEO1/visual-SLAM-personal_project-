@@ -2,7 +2,9 @@ nmpc_node:
   ros__parameters:
 
     # Path to reference trajectory file (.npy, shape [T, 3]: each row is [x, y, theta])
-    traj_file: '/home/jinwooseo/ros2_ws/src/nmpc_controller/scripts/ref_traj.npy'
+    # Default value is provided by nmpc.launch.py (package share); override with
+    # `traj_file:=<absolute path>` on the launch command line if needed.
+    traj_file: ''
 
     # NMPC horizon
     N:   20      # prediction steps

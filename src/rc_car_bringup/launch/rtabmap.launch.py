@@ -89,7 +89,7 @@ def generate_launch_description():
         # ── 단안 depth 추정 (Occupancy Grid 생성용) ──────────────
         # monocular triangulation 으로 sparse depth map 생성
         'gen_depth': True,
-        'gen_depth_decimation': 4,          # 연산 부하 감소
+        'gen_depth_decimation': 4,        # 연산 부하 감소
 
         # ── 검출/루프클로저 주기 (RPi 부담 ↓, PC 측이지만 보수적) ──
         'Rtabmap/DetectionRate': '1.0',     # Hz
@@ -102,6 +102,13 @@ def generate_launch_description():
         'Kp/MaxFeatures': '400',
         'Kp/DetectorStrategy': '8',         # 8 = ORB (BRIEF 대신 명시)
     }
+
+    # 토픽 remapping
+    rtabmap_remappings = [
+        ('rgb/image',       '/camera/image_decompressed'),
+        ('rgb/camera_info', '/camera/camera_info'),
+        ('odom',            '/odometry/filtered'),
+    ]
 
     # Wi-Fi 대역폭 절감: Pi 가 보내는 /camera/image_raw/compressed 를
     # PC 측에서 republish 로 풀어 /camera/image_decompressed 로 재발행
@@ -116,14 +123,6 @@ def generate_launch_description():
         ],
         output='screen',
     )
-
-    # 토픽 remapping
-    rtabmap_remappings = [
-        ('rgb/image',       '/camera/image_decompressed'),
-        ('rgb/camera_info', '/camera/camera_info'),
-        ('odom',            '/odometry/filtered'),
-        ('imu',             '/imu/data'),
-    ]
 
     rtabmap_node = Node(
         package='rtabmap_slam',

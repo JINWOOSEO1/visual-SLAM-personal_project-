@@ -9,11 +9,12 @@ from launch_ros.actions import Node
 def generate_launch_description():
     pkg_share  = get_package_share_directory('nmpc_controller')
     params_file = os.path.join(pkg_share, 'config', 'nmpc_params.yaml')
+    default_traj = os.path.join(pkg_share, 'scripts', 'ref_traj.npy')
 
     traj_file_arg = DeclareLaunchArgument(
         'traj_file',
-        default_value='',
-        description='Absolute path to ref_traj.npy (overrides YAML if non-empty)',
+        default_value=default_traj,
+        description='Absolute path to ref_traj.npy (overrides YAML)',
     )
 
     nmpc_node = Node(
