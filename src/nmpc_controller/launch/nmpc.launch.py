@@ -26,6 +26,9 @@ def generate_launch_description():
             # CLI argument overrides the YAML value when provided
             {'traj_file': LaunchConfiguration('traj_file')},
         ],
+        # Remap to /odom until robot_localization EKF is configured.
+        # When EKF is running (Phase 6), remove this remapping.
+        remappings=[('/odometry/filtered', '/odom')],
         output='screen',
     )
 
