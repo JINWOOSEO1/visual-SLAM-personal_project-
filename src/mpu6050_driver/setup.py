@@ -30,6 +30,7 @@ setup(
     entry_points={
         'console_scripts': [
             'mpu6050_node = mpu6050_driver.mpu6050_node:main',
+            'imu_kalman_node = mpu6050_driver.imu_kalman_node:main',
         ],
     },
 )

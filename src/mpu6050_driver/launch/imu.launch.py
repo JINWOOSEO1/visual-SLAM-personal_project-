@@ -20,16 +20,15 @@ def generate_launch_description():
             }],
             output='screen',
         ),
-        # Madgwick 필터: /imu/data_raw → /imu/data (orientation 포함)
+        # Kalman 필터: /imu/data_raw → /imu/data (orientation 포함)
         Node(
-            package='imu_filter_madgwick',
-            executable='imu_filter_madgwick_node',
+            package='mpu6050_driver',
+            executable='imu_kalman_node',
             name='imu_filter',
             parameters=[{
-                'use_mag': False,
-                'publish_tf': False,
-                'world_frame': 'enu',
-                'frequency': 50.0,
+                'q_angle': 0.001,    # 각도 프로세스 노이즈
+                'q_bias': 0.003,     # 자이로 바이어스 프로세스 노이즈
+                'r_measure': 0.03,   # 가속도계 측정 노이즈
             }],
             remappings=[
                 ('imu/data_raw', 'imu/data_raw'),
