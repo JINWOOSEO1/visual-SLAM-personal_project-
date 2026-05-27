@@ -28,7 +28,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Int32
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import Twist, TransformStamped
 from tf2_ros import TransformBroadcaster
 
 
@@ -73,6 +73,11 @@ class OdometryNode(Node):
         self._last_left  = 0
         self._last_right = 0
 
+        # Direction signs inferred from /cmd_vel (+1 forward, -1 backward, 0 stop).
+        # Encoder_node publishes unsigned cumulative ticks, so we must track direction here.
+        self._dir_left  = 1
+        self._dir_right = 1
+
         # ─── 퍼블리셔 / TF ───────────────────────────────────────
         self._odom_pub = self.create_publisher(Odometry, '/odom', 10)
         self._tf_broadcaster = TransformBroadcaster(self) if self.pub_tf else None
@@ -80,6 +85,17 @@ class OdometryNode(Node):
         # ─── 서브스크라이버 ──────────────────────────────────────
         self.create_subscription(Int32, '/encoder/left_ticks',  self._cb_left,  10)
         self.create_subscription(Int32, '/encoder/right_ticks', self._cb_right, 10)
+        self.create_subscription(Twist, '/cmd_vel', self._cb_cmd_vel, 10)
+
+    # ─── cmd_vel 수신: 각 바퀴 방향 부호 갱신 ────────────────────
+    def _cb_cmd_vel(self, msg: Twist):
+        _DEAD = 0.005   # m/s — stop threshold (matches pid_controller_node)
+        v = msg.linear.x
+        w = msg.angular.z
+        vL = v - w * self.wb / 2.0
+        vR = v + w * self.wb / 2.0
+        self._dir_left  = 0 if abs(vL) < _DEAD else (1 if vL > 0 else -1)
+        self._dir_right = 0 if abs(vR) < _DEAD else (1 if vR > 0 else -1)
 
     # ─── 틱 수신 ─────────────────────────────────────────────────
     def _cb_left(self, msg: Int32):
@@ -101,9 +117,9 @@ class OdometryNode(Node):
             self._prev_time  = now_ros
             return
 
-        # 구간 틱 차이
-        d_left  = (self._last_left  - self._prev_left)  * self.dist_per_tick
-        d_right = (self._last_right - self._prev_right) * self.dist_per_tick
+        # 구간 틱 차이 — 방향 부호 적용 (encoder_node는 unsigned 카운트만 함)
+        d_left  = (self._last_left  - self._prev_left)  * self.dist_per_tick * self._dir_left
+        d_right = (self._last_right - self._prev_right) * self.dist_per_tick * self._dir_right
 
         dt = (now_ros - self._prev_time).nanoseconds * 1e-9
 

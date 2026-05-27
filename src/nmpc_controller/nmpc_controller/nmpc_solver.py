@@ -109,7 +109,7 @@ class NMPCSolver:
             opti.subject_to(S[:, k + 1] == self._rk4_step(S[:, k], U[:, k]))
 
         # Input box constraints
-        opti.subject_to(opti.bounded(-self.v_max, U[0, :], self.v_max))
+        opti.subject_to(opti.bounded(0.0, U[0, :], self.v_max))   # v >= 0: forward-only
         opti.subject_to(opti.bounded(-self.w_max, U[1, :], self.w_max))
 
         # IPOPT options — suppress stdout, limit iterations for real-time use

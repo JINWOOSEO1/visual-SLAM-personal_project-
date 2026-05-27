@@ -29,7 +29,10 @@ Encoder direction:
   the L298N IN pins.  On direction reversal the PID integral is reset.
 """
 
+import csv
+import datetime
 import math
+import os
 from collections import deque
 
 import RPi.GPIO as GPIO
@@ -159,6 +162,8 @@ class PIDControllerNode(Node):
         self._pwm_right.start(0.0)
 
         # ── State ─────────────────────────────────────────────────
+        self._cmd_v     = 0.0   # latest cmd_vel linear.x  [m/s]
+        self._cmd_w     = 0.0   # latest cmd_vel angular.z [rad/s]
         self._target_vL = 0.0   # target left  wheel velocity [m/s], signed
         self._target_vR = 0.0   # target right wheel velocity [m/s], signed
         self._last_cmd_time = self.get_clock().now()
@@ -175,6 +180,27 @@ class PIDControllerNode(Node):
         # Previous direction sign (for detecting reversal and resetting PID)
         self._prev_dir_L = 0   # -1, 0, +1
         self._prev_dir_R = 0
+
+        # ── Result logging ────────────────────────────────────────
+        result_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+            'result',
+        )
+        os.makedirs(result_dir, exist_ok=True)
+        ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        log_path = os.path.join(result_dir, f'pid_log_{ts}.csv')
+        self._csv_file   = open(log_path, 'w', newline='')
+        self._csv_writer = csv.writer(self._csv_file)
+        self._csv_writer.writerow([
+            'time_s',
+            'cmd_v', 'cmd_w',
+            'target_vL', 'target_vR',
+            'left_ticks', 'right_ticks',
+            'meas_vL', 'meas_vR',
+            'duty_L', 'duty_R',
+        ])
+        self._log_start_time = self.get_clock().now()
+        self.get_logger().info(f'Logging PID data to {log_path}')
 
         # ── ROS interfaces ────────────────────────────────────────
         self.create_subscription(Twist,  '/cmd_vel',              self._cb_cmd_vel,     10)
@@ -194,6 +220,8 @@ class PIDControllerNode(Node):
         self._last_cmd_time = self.get_clock().now()
         v = float(msg.linear.x)
         w = float(msg.angular.z)
+        self._cmd_v = v
+        self._cmd_w = w
         self._target_vL = v - w * self._wheel_base / 2.0
         self._target_vR = v + w * self._wheel_base / 2.0
 
@@ -255,7 +283,7 @@ class PIDControllerNode(Node):
             GPIO.output(in_b, GPIO.LOW)
             pwm_obj.ChangeDutyCycle(0.0)
             pid.reset()
-            return 0
+            return 0, 0.0
 
         cur_dir = 1 if target_v > 0 else -1
 
@@ -280,7 +308,7 @@ class PIDControllerNode(Node):
             GPIO.output(in_b, GPIO.HIGH)
 
         pwm_obj.ChangeDutyCycle(duty)
-        return cur_dir
+        return cur_dir, duty
 
     # ── 20 Hz control loop ────────────────────────────────────────
     def _control_loop(self):
@@ -296,16 +324,31 @@ class PIDControllerNode(Node):
 
         meas_vL, meas_vR = self._measure_velocities()
 
-        self._prev_dir_L = self._apply_wheel(
+        self._prev_dir_L, duty_L = self._apply_wheel(
             self._left_in1, self._left_in2, self._pwm_left,
             self._target_vL, self._pid_left, meas_vL,
             self._prev_dir_L, self._left_invert,
         )
-        self._prev_dir_R = self._apply_wheel(
+        self._prev_dir_R, duty_R = self._apply_wheel(
             self._right_in3, self._right_in4, self._pwm_right,
             self._target_vR, self._pid_right, meas_vR,
             self._prev_dir_R, self._right_invert,
         )
+
+        elapsed_s = (self.get_clock().now() - self._log_start_time).nanoseconds / 1e9
+        self._csv_writer.writerow([
+            f'{elapsed_s:.3f}',
+            f'{self._cmd_v:.4f}',
+            f'{self._cmd_w:.4f}',
+            f'{self._target_vL:.4f}',
+            f'{self._target_vR:.4f}',
+            self._left_ticks_cur,
+            self._right_ticks_cur,
+            f'{meas_vL:.4f}',
+            f'{meas_vR:.4f}',
+            f'{duty_L:.2f}',
+            f'{duty_R:.2f}',
+        ])
 
         self.get_logger().info(
             f'[PID] '
@@ -335,6 +378,8 @@ class PIDControllerNode(Node):
             self._pwm_right.stop()
         finally:
             GPIO.cleanup()
+        if hasattr(self, '_csv_file'):
+            self._csv_file.close()
         super().destroy_node()
 
 

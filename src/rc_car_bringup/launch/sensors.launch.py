@@ -9,8 +9,15 @@
     5. encoder_node + odometry_node (휠 오도메트리)
     6. robot_localization EKF (/odom + /imu/data → /odometry/filtered)
 
+모터 제어 노드는 포함하지 않는다 (motor_driver_node / pid_controller_node 중
+하나를 별도 터미널에서 선택 실행 — 둘 다 같은 GPIO 핀을 쓰므로 동시 실행 금지).
+
 사용법:
     ros2 launch rc_car_bringup sensors.launch.py
+    # 그 다음 별도 터미널에서:
+    ros2 launch pid_velocity_controller pid_controller.launch.py   # closed-loop
+    # 또는
+    ros2 launch motor_controller motor.launch.py                   # open-loop
 """
 
 import os
@@ -26,7 +33,6 @@ def generate_launch_description():
     bringup_dir = get_package_share_directory('rc_car_bringup')
     imu_dir = get_package_share_directory('mpu6050_driver')
     odom_dir = get_package_share_directory('wheel_odometry')
-    motor_dir = get_package_share_directory('motor_controller')
 
     # IMU 파이프라인 (mpu6050 + madgwick filter)
     imu_launch = IncludeLaunchDescription(
@@ -70,12 +76,11 @@ def generate_launch_description():
         )
     )
 
-    # 모터 드라이버 (/cmd_vel → GPIO PWM)
-    motor_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(motor_dir, 'launch', 'motor.launch.py')
-        )
-    )
+    # NOTE: 모터 제어 노드(motor_driver_node / pid_controller_node)는 여기서
+    # 실행하지 않는다. 두 노드가 같은 L298N GPIO 핀을 제어하므로 둘 중 하나만
+    # 별도 터미널에서 골라 실행한다:
+    #   ros2 launch motor_controller motor.launch.py            (open-loop)
+    #   ros2 launch pid_velocity_controller pid_controller.launch.py  (closed-loop)
 
     return LaunchDescription([
         imu_launch,
@@ -83,5 +88,4 @@ def generate_launch_description():
         camera_node,
         odom_launch,
         ekf_launch,
-        motor_launch,
     ])
