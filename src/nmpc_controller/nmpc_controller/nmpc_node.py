@@ -33,6 +33,8 @@ class NMPCNode(Node):
         self.declare_parameter('N',            20)
         self.declare_parameter('dt',           0.1)
         self.declare_parameter('v_max',        0.3)
+        self.declare_parameter('v_min',       -0.3)   # set to 0.0 to forbid reverse
+        self.declare_parameter('v_abs_min',    0.0)   # set >0.0 to constrain abs(v)
         self.declare_parameter('w_max',        1.5)
         self.declare_parameter('Q_x',          2.0)
         self.declare_parameter('Q_y',          2.0)
@@ -48,6 +50,8 @@ class NMPCNode(Node):
         N                = self.get_parameter('N').value
         dt               = self.get_parameter('dt').value
         v_max            = self.get_parameter('v_max').value
+        v_min            = self.get_parameter('v_min').value
+        v_abs_min        = self.get_parameter('v_abs_min').value
         w_max            = self.get_parameter('w_max').value
         self._odom_timeout = self.get_parameter('odom_timeout').value
 
@@ -82,7 +86,7 @@ class NMPCNode(Node):
         self.get_logger().info('Building NMPC solver (CasADi NLP) ...')
         self._solver = NMPCSolver(
             N=N, dt=dt, Q=Q, R=R, Q_N=Q_N,
-            v_max=v_max, w_max=w_max,
+            v_max=v_max, v_min=v_min, v_abs_min=v_abs_min, w_max=w_max,
         )
         self.get_logger().info('NMPC solver ready')
 
@@ -102,7 +106,8 @@ class NMPCNode(Node):
         self.create_timer(dt, self._control_loop)
 
         self.get_logger().info(
-            f'NMPCNode started: N={N} dt={dt}s v_max={v_max} w_max={w_max} '
+            f'NMPCNode started: N={N} dt={dt}s v_min={v_min} v_max={v_max} '
+            f'v_abs_min={v_abs_min} w_max={w_max} '
             f'traj_len={self._T}')
 
     # ------------------------------------------------------------------

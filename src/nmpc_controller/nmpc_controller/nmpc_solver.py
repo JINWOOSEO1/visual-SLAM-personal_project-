@@ -34,11 +34,18 @@ class NMPCSolver:
         Q_N: list = None,
         v_max: float = 0.3,
         w_max: float = 1.5,
+        v_min: float = -0.3,   # set to 0.0 to forbid reverse for forward-only trajectories
+        v_abs_min: float = 0.0,
     ):
         self.N = N
         self.dt = dt
         self.v_max = v_max
         self.w_max = w_max
+        self.v_min = v_min
+        self.v_abs_min = max(0.0, float(v_abs_min))
+
+        if self.v_abs_min > 0.0 and max(abs(self.v_min), abs(self.v_max)) < self.v_abs_min:
+            raise ValueError('v_abs_min is larger than both v_min and v_max magnitudes')
 
         self.Q   = np.diag(Q   or [2.0, 2.0, 0.5])
         self.R   = np.diag(R   or [0.1, 0.05])
@@ -47,7 +54,10 @@ class NMPCSolver:
         self._build_problem()
 
         # Previous solution for warm starting
-        self._prev_u = np.zeros((N, 2))    # (N, 2)
+        initial_v = self.v_abs_min if self.v_abs_min > 0.0 else 0.0
+        if initial_v > self.v_max:
+            initial_v = -self.v_abs_min
+        self._prev_u = np.tile([initial_v, 0.0], (N, 1))    # (N, 2)
         self._prev_s = None                # (N+1, 3), None on first call
 
     # ------------------------------------------------------------------
@@ -109,7 +119,9 @@ class NMPCSolver:
             opti.subject_to(S[:, k + 1] == self._rk4_step(S[:, k], U[:, k]))
 
         # Input box constraints
-        opti.subject_to(opti.bounded(0.0, U[0, :], self.v_max))   # v >= 0: forward-only
+        opti.subject_to(opti.bounded(self.v_min, U[0, :], self.v_max))
+        if self.v_abs_min > 0.0:
+            opti.subject_to(U[0, :] ** 2 >= self.v_abs_min ** 2)
         opti.subject_to(opti.bounded(-self.w_max, U[1, :], self.w_max))
 
         # IPOPT options — suppress stdout, limit iterations for real-time use

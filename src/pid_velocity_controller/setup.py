@@ -27,6 +27,8 @@ setup(
     entry_points={
         'console_scripts': [
             'pid_controller_node = pid_velocity_controller.pid_controller_node:main',
+            'step_cmd_vel_node = pid_velocity_controller.step_cmd_vel_node:main',
+            'analyze_pid_step_response = pid_velocity_controller.analyze_pid_step_response:main',
         ],
     },
 )

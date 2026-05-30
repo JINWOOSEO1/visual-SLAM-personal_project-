@@ -93,8 +93,8 @@ def main():
                         help='Radius for circle/figure8 [m]')
     parser.add_argument('--length',    type=float, default=3.0,
                         help='Length for line trajectory [m]')
-    parser.add_argument('--speed',     type=float, default=0.2,
-                        help='Reference speed [m/s] — keep below v_max (0.3)')
+    parser.add_argument('--speed',     type=float, default=0.3,
+                        help='Reference speed [m/s] — keep within NMPC speed constraints')
     parser.add_argument('--dt',        type=float, default=0.1,
                         help='Sample interval [s] — must match NMPC dt parameter')
     parser.add_argument('--n_laps',    type=float, default=1.0,

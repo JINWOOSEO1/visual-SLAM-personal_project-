@@ -13,12 +13,13 @@ GPIO output (L298N):
   Left  wheel : ENA=GPIO24 (PWM), IN1=GPIO22, IN2=GPIO23
   Right wheel : ENB=GPIO25 (PWM), IN3=GPIO27, IN4=GPIO26
 
-Control loop (20 Hz):
+Control loop:
   1. Differential kinematics: (v, w) → target_vL, target_vR
   2. Velocity measurement: Δticks * dist_per_tick / dt  (moving average for smoothing)
   3. PID error: |target| - measured  (unsigned; direction set separately from target sign)
-  4. PID output: duty cycle [min_pwm, max_pwm]
-  5. GPIO: set direction pins, apply PWM duty
+  4. Feedforward duty from identified velocity-duty model
+  5. PID output: raw duty correction
+  6. GPIO: set direction pins, apply clipped PWM duty
 
 NOTE: Do NOT run simultaneously with motor_controller/motor_driver_node.
       Both packages control the same GPIO pins (ENA/ENB/IN1-4).
@@ -72,8 +73,9 @@ class PIDControllerNode(Node):
 
         # PWM
         self.declare_parameter('pwm_frequency', 1000.0)   # Hz
-        self.declare_parameter('min_pwm',        45.0)    # % dead-zone lower bound
         self.declare_parameter('max_pwm',        100.0)   # %
+        self.declare_parameter('ff_velocity_slope', 0.00446)
+        self.declare_parameter('ff_velocity_intercept', 0.217)
 
         # PID gains — left wheel
         self.declare_parameter('left_kp',  80.0)
@@ -91,7 +93,7 @@ class PIDControllerNode(Node):
 
         # Safety
         self.declare_parameter('cmd_timeout',   0.5)    # s — stop if /cmd_vel stale
-        self.declare_parameter('control_rate',  20.0)   # Hz — PID loop frequency
+        self.declare_parameter('control_rate',  25.0)   # Hz — PID loop frequency
 
         # Velocity smoothing
         self.declare_parameter('vel_smooth_window', 3)   # ticks window size
@@ -113,9 +115,13 @@ class PIDControllerNode(Node):
         self._left_invert  = bool(self.get_parameter('left_invert').value)
         self._right_invert = bool(self.get_parameter('right_invert').value)
 
-        self._min_pwm  = float(self.get_parameter('min_pwm').value)
         self._max_pwm  = float(self.get_parameter('max_pwm').value)
+        self._ff_velocity_slope = float(self.get_parameter('ff_velocity_slope').value)
+        self._ff_velocity_intercept = float(self.get_parameter('ff_velocity_intercept').value)
         self._cmd_timeout = float(self.get_parameter('cmd_timeout').value)
+
+        if self._ff_velocity_slope <= 0.0:
+            raise ValueError('ff_velocity_slope must be > 0')
 
         smooth_n = int(self.get_parameter('vel_smooth_window').value)
         control_rate = float(self.get_parameter('control_rate').value)
@@ -125,24 +131,27 @@ class PIDControllerNode(Node):
         deriv_tau  = float(self.get_parameter('derivative_tau').value)
 
         # ── PID controllers (one per wheel) ───────────────────────
-        # Output range: [0, max_pwm - min_pwm]  (offset by min_pwm when applying)
-        # output_min=0 so PID can drive toward zero and we handle stop separately
+        # PID returns a raw duty correction. Final actuator clipping is applied
+        # after adding the feedforward duty in _apply_wheel().
+        self._left_kp = float(self.get_parameter('left_kp').value)
+        self._left_ki = float(self.get_parameter('left_ki').value)
+        self._left_kd = float(self.get_parameter('left_kd').value)
+        self._right_kp = float(self.get_parameter('right_kp').value)
+        self._right_ki = float(self.get_parameter('right_ki').value)
+        self._right_kd = float(self.get_parameter('right_kd').value)
+
         self._pid_left = PID(
-            kp=float(self.get_parameter('left_kp').value),
-            ki=float(self.get_parameter('left_ki').value),
-            kd=float(self.get_parameter('left_kd').value),
+            kp=self._left_kp,
+            ki=self._left_ki,
+            kd=self._left_kd,
             integral_limit=int_lim,
-            output_min=0.0,
-            output_max=self._max_pwm - self._min_pwm,
             derivative_tau=deriv_tau,
         )
         self._pid_right = PID(
-            kp=float(self.get_parameter('right_kp').value),
-            ki=float(self.get_parameter('right_ki').value),
-            kd=float(self.get_parameter('right_kd').value),
+            kp=self._right_kp,
+            ki=self._right_ki,
+            kd=self._right_kd,
             integral_limit=int_lim,
-            output_min=0.0,
-            output_max=self._max_pwm - self._min_pwm,
             derivative_tau=deriv_tau,
         )
 
@@ -188,7 +197,7 @@ class PIDControllerNode(Node):
         )
         os.makedirs(result_dir, exist_ok=True)
         ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        log_path = os.path.join(result_dir, f'pid_log_{ts}.csv')
+        log_path = os.path.join(result_dir, f'p{int(self._left_kp)}_i{int(self._left_ki)}_d{int(self._left_kd)}.csv')
         self._csv_file   = open(log_path, 'w', newline='')
         self._csv_writer = csv.writer(self._csv_file)
         self._csv_writer.writerow([
@@ -212,7 +221,9 @@ class PIDControllerNode(Node):
         self.get_logger().info(
             f'PIDControllerNode started: control_rate={control_rate:.0f}Hz '
             f'dist_per_tick={self._dist_per_tick*1000:.3f}mm '
-            f'min_pwm={self._min_pwm}% max_pwm={self._max_pwm}%'
+            f'ff_model: v={self._ff_velocity_slope:.5f}*duty+'
+            f'{self._ff_velocity_intercept:.3f} '
+            f'max_pwm={self._max_pwm:.1f}%'
         )
 
     # ── Subscription callbacks ────────────────────────────────────
@@ -259,9 +270,24 @@ class PIDControllerNode(Node):
                 sum(self._vel_buf_R) / len(self._vel_buf_R))
 
     # ── GPIO helpers ──────────────────────────────────────────────
+    def _stop_wheel(self, in_a, in_b, pwm_obj, pid: PID) -> tuple:
+        GPIO.output(in_a, GPIO.LOW)
+        GPIO.output(in_b, GPIO.LOW)
+        pwm_obj.ChangeDutyCycle(0.0)
+        pid.reset()
+        return 0, 0.0
+
+    def _feedforward_duty(self, target_speed: float) -> float:
+        """Invert v = slope*duty + intercept for the requested target speed."""
+        duty = (
+            (abs(target_speed) - self._ff_velocity_intercept)
+            / self._ff_velocity_slope
+        )
+        return max(0.0, duty)
+
     def _apply_wheel(self, in_a, in_b, pwm_obj, target_v: float,
                      pid: PID, measured_speed: float, prev_dir: int,
-                     invert: bool) -> int:
+                     invert: bool) -> tuple:
         """
         Run one PID step and apply the result to a single wheel.
 
@@ -278,12 +304,7 @@ class PIDControllerNode(Node):
             current direction (-1, 0, +1)
         """
         if abs(target_v) < _STOP_THRESHOLD:
-            # Stop
-            GPIO.output(in_a, GPIO.LOW)
-            GPIO.output(in_b, GPIO.LOW)
-            pwm_obj.ChangeDutyCycle(0.0)
-            pid.reset()
-            return 0, 0.0
+            return self._stop_wheel(in_a, in_b, pwm_obj, pid)
 
         cur_dir = 1 if target_v > 0 else -1
 
@@ -294,9 +315,8 @@ class PIDControllerNode(Node):
         # PID operates on speed magnitude
         error = abs(target_v) - measured_speed
         pid_out = pid.compute(error, self._dt)
-
-        # Map PID output [0, max_pwm-min_pwm] → duty [min_pwm, max_pwm]
-        duty = self._min_pwm + pid_out
+        duty_ff = self._feedforward_duty(target_v)
+        duty = max(0.0, min(self._max_pwm, duty_ff + pid_out))
 
         # Direction pin logic (invert swap if wiring is reversed)
         forward = (cur_dir == 1) ^ invert
@@ -310,7 +330,7 @@ class PIDControllerNode(Node):
         pwm_obj.ChangeDutyCycle(duty)
         return cur_dir, duty
 
-    # ── 20 Hz control loop ────────────────────────────────────────
+    # ── control loop ────────────────────────────────────────
     def _control_loop(self):
         # Safety: stop on cmd_vel timeout
         elapsed = (self.get_clock().now() - self._last_cmd_time).nanoseconds / 1e9

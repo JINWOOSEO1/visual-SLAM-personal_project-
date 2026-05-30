@@ -15,5 +15,7 @@ CLAUDE.md
 .claude/
 
 # Text file
-.pdf
-.gv
+*.pdf
+*.gv
+*.csv
+*.npy

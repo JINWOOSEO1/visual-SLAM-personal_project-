@@ -8,7 +8,7 @@ class PID:
         I       += Ki * error_k * dt          (clamped to [-integral_limit, integral_limit])
         D_raw    = Kd * (error_k - error_k-1) / dt
         D        = alpha * D_prev + (1 - alpha) * D_raw  (low-pass, alpha = tau/(tau+dt))
-        output   = clamp(P + I + D, output_min, output_max)
+        output   = P + I + D
 
     Resetting:
         Call reset() when setpoint changes sign (direction reversal) to clear
@@ -21,16 +21,12 @@ class PID:
         ki: float,
         kd: float,
         integral_limit: float = 50.0,
-        output_min: float = 0.0,
-        output_max: float = 100.0,
         derivative_tau: float = 0.05,
     ):
         self.kp = kp
         self.ki = ki
         self.kd = kd
         self.integral_limit = integral_limit
-        self.output_min = output_min
-        self.output_max = output_max
         self.derivative_tau = derivative_tau  # low-pass time constant [s]
 
         self._integral   = 0.0
@@ -47,10 +43,10 @@ class PID:
             dt:    elapsed time since last call [s]  (must be > 0)
 
         Returns:
-            output clamped to [output_min, output_max]
+            Raw PID output. Actuator clipping is handled by the caller.
         """
         if dt <= 0.0:
-            return self.output_min
+            return 0.0
 
         # Proportional
         p_term = self.kp * error
@@ -67,8 +63,7 @@ class PID:
 
         self._prev_error = error
 
-        output = p_term + self._integral + self._d_filtered
-        return max(self.output_min, min(self.output_max, output))
+        return p_term + self._integral + self._d_filtered
 
     # ------------------------------------------------------------------
     def reset(self):

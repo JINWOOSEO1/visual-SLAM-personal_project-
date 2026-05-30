@@ -51,7 +51,7 @@ class MotorDriverNode(Node):
 
         # PWM
         self.declare_parameter('pwm_frequency', 1000.0)      # Hz
-        self.declare_parameter('min_pwm', 45.0)              # dead-zone 보정 (duty %)
+        self.declare_parameter('min_pwm', 50.0)              # dead-zone 보정 (duty %)
         self.declare_parameter('max_pwm', 100.0)             # 최대 duty %
 
         # 안전

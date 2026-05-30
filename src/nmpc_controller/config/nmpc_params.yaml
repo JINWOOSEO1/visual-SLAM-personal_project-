@@ -10,9 +10,12 @@ nmpc_node:
     N:   20      # prediction steps
     dt:  0.1     # time step [s]  (= control period)
 
-    # Hardware constraints (matching motor_driver_node limits)
-    v_max: 0.3   # max linear speed  [m/s]
-    w_max: 1.5   # max angular speed [rad/s]
+    # Hardware constraints
+    # PWM duty 50 ~= 0.24 m/s, duty 100 ~= 0.37 m/s; keep margin inside that range.
+    v_max:      0.36   # max linear speed magnitude [m/s]
+    v_min:     -0.36   # min linear speed [m/s] — set to 0.25 to force forward-only
+    v_abs_min:  0.25   # constrain |v_linear| >= this value; 0.0 disables it
+    w_max:      1.5    # max angular speed [rad/s]
 
     # State tracking cost weights Q = diag(Q_x, Q_y, Q_theta)
     Q_x:     2.0

@@ -30,7 +30,7 @@ def generate_launch_description():
 
                 # PWM
                 'pwm_frequency': 1000.0,
-                'min_pwm': 45.0,
+                'min_pwm': 50.0,
                 'max_pwm': 100.0,
 
                 # 안전
