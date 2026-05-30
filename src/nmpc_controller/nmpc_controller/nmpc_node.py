@@ -6,8 +6,9 @@ Subscribes to /odometry/filtered, runs NMPC at 10 Hz, publishes /cmd_vel.
 
 Reference index tracking (monotonic):
   - First call: a = 0
-  - Each step: compare dist(current, ref[a]) vs dist(current, ref[a+1])
-               advance a if ref[a+1] is closer (strictly monotonic, no back-snap)
+  - Each step: search the window [a, a + W - 1] and pick the waypoint that
+               minimizes position distance + heading_weight * |heading error|
+               (strictly monotonic, no back-snap)
 """
 
 import math
@@ -45,6 +46,8 @@ class NMPCNode(Node):
         self.declare_parameter('QN_y',         4.0)
         self.declare_parameter('QN_theta',     1.0)
         self.declare_parameter('odom_timeout', 1.0)
+        self.declare_parameter('ref_search_window', 10)
+        self.declare_parameter('ref_heading_weight', 0.5)
 
         traj_file        = self.get_parameter('traj_file').value
         N                = self.get_parameter('N').value
@@ -54,6 +57,8 @@ class NMPCNode(Node):
         v_abs_min        = self.get_parameter('v_abs_min').value
         w_max            = self.get_parameter('w_max').value
         self._odom_timeout = self.get_parameter('odom_timeout').value
+        self._ref_search_window  = self.get_parameter('ref_search_window').value
+        self._ref_heading_weight = self.get_parameter('ref_heading_weight').value
 
         Q   = [self.get_parameter('Q_x').value,
                self.get_parameter('Q_y').value,
@@ -130,20 +135,33 @@ class NMPCNode(Node):
             self._odom_lat_ms_window.append(lat_ms)
 
     # ------------------------------------------------------------------
-    def _advance_ref_idx(self, pos: np.ndarray):
+    def _advance_ref_idx(self, state: np.ndarray):
         """
-        Advance reference index a by comparing distance to ref[a] and ref[a+1].
-        Strictly monotonic — never goes backward.
+        Select reference index a by searching the window [a, a + W - 1]
+        (W = ref_search_window, clipped to the trajectory end) and picking the
+        waypoint whose position AND heading best match the current state.
+        Combined cost = position distance + heading_weight * |wrapped heading error|.
+        Strictly monotonic — the window starts at the current index, so a never
+        goes backward.
         """
         a = self._ref_idx
         if a >= self._T - 1:
             return
 
-        d_current = float(np.linalg.norm(pos - self._ref_traj[a, :2]))
-        d_next    = float(np.linalg.norm(pos - self._ref_traj[a + 1, :2]))
+        pos   = state[:2]
+        theta = state[2]
 
-        if d_next < d_current:
-            self._ref_idx = a + 1
+        hi = min(a + self._ref_search_window, self._T)
+        ref = self._ref_traj[a:hi]
+
+        d_pos = np.linalg.norm(ref[:, :2] - pos, axis=1)
+
+        dtheta = ref[:, 2] - theta
+        dtheta = np.arctan2(np.sin(dtheta), np.cos(dtheta))   # wrap to [-pi, pi]
+        d_head = np.abs(dtheta)
+
+        cost = d_pos + self._ref_heading_weight * d_head
+        self._ref_idx = a + int(np.argmin(cost))
 
     # ------------------------------------------------------------------
     def _get_ref_segment(self) -> np.ndarray:
@@ -183,7 +201,7 @@ class NMPCNode(Node):
         pos = self._current_state[:2]
 
         # Advance reference index
-        self._advance_ref_idx(pos)
+        self._advance_ref_idx(self._current_state)
 
         # Check trajectory completion
         dist_to_end = float(np.linalg.norm(pos - self._ref_traj[-1, :2]))
