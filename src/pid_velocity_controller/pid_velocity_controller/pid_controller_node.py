@@ -197,7 +197,7 @@ class PIDControllerNode(Node):
         )
         os.makedirs(result_dir, exist_ok=True)
         ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        log_path = os.path.join(result_dir, f'p{int(self._left_kp)}_i{int(self._left_ki)}_d{int(self._left_kd)}.csv')
+        log_path = os.path.join(result_dir, f'{ts}.csv')
         self._csv_file   = open(log_path, 'w', newline='')
         self._csv_writer = csv.writer(self._csv_file)
         self._csv_writer.writerow([

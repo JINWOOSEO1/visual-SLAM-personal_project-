@@ -36,12 +36,12 @@ pid_controller_node:
     # Error unit : m/s  (|target| - measured, always >= 0 during normal tracking)
     # Tuning tip : start with Ki=0, Kd=0; increase Kp until oscillation, then add Ki
     left_kp:  300.0
-    left_ki:  120.0
+    left_ki:  40.0
     left_kd:   0.0
 
     # ── PID gains — right wheel ──────────────────────────────────
     right_kp: 300.0
-    right_ki: 120.0
+    right_ki: 40.0
     right_kd:  0.0
 
     # ── PID limits ───────────────────────────────────────────────
