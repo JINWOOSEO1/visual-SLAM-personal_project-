@@ -15,7 +15,7 @@ nmpc_node:
     # NMPC constrains each wheel speed, not body-frame v directly:
     # v_left = v - w*wheel_base/2, v_right = v + w*wheel_base/2.
     wheel_base:  0.150  # m
-    wheel_v_min: 0.15    # min left/right wheel speed [m/s]
+    wheel_v_min: 0.20    # min left/right wheel speed [m/s]
     wheel_v_max: 0.60   # max left/right wheel speed [m/s]
     # Max wheel speed change per NMPC step [m/s]. 0.0 disables slew constraints.
     wheel_delta_max: 0.15
