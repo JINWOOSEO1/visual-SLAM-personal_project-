@@ -6,12 +6,29 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
+def default_real_traj_path(pkg_share):
+    candidates = [
+        os.path.abspath(os.path.join(
+            pkg_share, '..', '..', '..', '..', 'src', 'nmpc_controller',
+        )),
+        os.path.abspath(os.path.join(
+            os.path.dirname(os.path.realpath(__file__)), '..',
+        )),
+    ]
+
+    for pkg_dir in candidates:
+        scripts_dir = os.path.join(pkg_dir, 'scripts')
+        if os.path.isdir(scripts_dir):
+            return os.path.join(scripts_dir, 'real_traj.npy')
+
+    return os.path.join(pkg_share, 'scripts', 'real_traj.npy')
+
+
 def generate_launch_description():
     pkg_share  = get_package_share_directory('nmpc_controller')
     params_file = os.path.join(pkg_share, 'config', 'nmpc_params.yaml')
     default_traj = os.path.join(pkg_share, 'scripts', 'ref_traj.npy')
-    src_pkg_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.realpath(__file__)), '..'))
-    default_real_traj = os.path.join(src_pkg_dir, 'scripts', 'real_traj.npy')
+    default_real_traj = default_real_traj_path(pkg_share)
 
     traj_file_arg = DeclareLaunchArgument(
         'traj_file',

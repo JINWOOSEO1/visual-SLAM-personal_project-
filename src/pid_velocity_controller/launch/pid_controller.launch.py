@@ -10,7 +10,7 @@ WARNING: Do NOT launch this together with motor_controller/motor.launch.py.
            - pid_controller_node: closed-loop (cmd_vel + encoder → PID → PWM)
 
 Prerequisite:
-  encoder_node must be running (provides /encoder/left_ticks, /encoder/right_ticks)
+  encoder_node must be running (provides /encoder/ticks)
   → ros2 launch wheel_odometry odometry.launch.py
     or start encoder_node separately.
 """

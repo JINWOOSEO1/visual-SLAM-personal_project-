@@ -4,8 +4,7 @@ encoder_node.py
 GPIO 인터럽트로 좌/우 엔코더 펄스를 카운트하여 퍼블리시
 
 Published topics:
-  /encoder/left_ticks  (std_msgs/Int32) : 왼쪽 누적 펄스 수
-  /encoder/right_ticks (std_msgs/Int32) : 오른쪽 누적 펄스 수
+  /encoder/ticks (std_msgs/Int32MultiArray) : [왼쪽 누적 펄스 수, 오른쪽 누적 펄스 수]
 
 Parameters:
   left_pin  (int, default=17)
@@ -14,10 +13,12 @@ Parameters:
   publish_rate (float, default=50.0) : Hz
 """
 
+import threading
+
 import RPi.GPIO as GPIO
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Int32
+from std_msgs.msg import Int32MultiArray
 
 
 class EncoderNode(Node):
@@ -39,6 +40,7 @@ class EncoderNode(Node):
         # ─── 카운터 ──────────────────────────────────────────────
         self._left_ticks  = 0
         self._right_ticks = 0
+        self._ticks_lock = threading.Lock()
 
         # ─── GPIO 설정 ───────────────────────────────────────────
         GPIO.setmode(GPIO.BCM)
@@ -57,8 +59,9 @@ class EncoderNode(Node):
         )
 
         # ─── 퍼블리셔 ────────────────────────────────────────────
-        self._pub_left  = self.create_publisher(Int32, '/encoder/left_ticks',  10)
-        self._pub_right = self.create_publisher(Int32, '/encoder/right_ticks', 10)
+        self._pub_ticks = self.create_publisher(
+            Int32MultiArray, '/encoder/ticks', 10
+        )
 
         # ─── 타이머 ──────────────────────────────────────────────
         period = 1.0 / publish_rate
@@ -66,19 +69,22 @@ class EncoderNode(Node):
 
     # ─── 인터럽트 콜백 ───────────────────────────────────────────
     def _cb_left(self, channel):
-        self._left_ticks += 1
+        with self._ticks_lock:
+            self._left_ticks += 1
 
     def _cb_right(self, channel):
-        self._right_ticks += 1
+        with self._ticks_lock:
+            self._right_ticks += 1
 
     # ─── 퍼블리시 ─────────────────────────────────────────────────
     def _publish(self):
-        msg_l = Int32()
-        msg_r = Int32()
-        msg_l.data = self._left_ticks
-        msg_r.data = self._right_ticks
-        self._pub_left.publish(msg_l)
-        self._pub_right.publish(msg_r)
+        with self._ticks_lock:
+            left_ticks = self._left_ticks
+            right_ticks = self._right_ticks
+
+        msg = Int32MultiArray()
+        msg.data = [left_ticks, right_ticks]
+        self._pub_ticks.publish(msg)
 
     def destroy_node(self):
         GPIO.cleanup()

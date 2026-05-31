@@ -2,7 +2,7 @@
 """
 nmpc_node.py
 
-Subscribes to /odometry/filtered, runs NMPC at 10 Hz, publishes /cmd_vel.
+Subscribes to /odom and /imu/data, fuses yaw at 50 Hz, runs NMPC, publishes /cmd_vel.
 
 Reference index tracking (monotonic):
   - First call: a = 0
@@ -20,9 +20,24 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
+from sensor_msgs.msg import Imu
 from geometry_msgs.msg import Twist
 
 from nmpc_controller.nmpc_solver import NMPCSolver
+
+
+def default_real_traj_file(traj_file: str) -> Path:
+    traj_path = Path(traj_file).resolve()
+    parts = traj_path.parts
+
+    if 'install' in parts:
+        install_idx = parts.index('install')
+        workspace_root = Path(*parts[:install_idx])
+        src_scripts = workspace_root / 'src' / 'nmpc_controller' / 'scripts'
+        if src_scripts.is_dir():
+            return src_scripts / 'real_traj.npy'
+
+    return traj_path.with_name('real_traj.npy')
 
 
 class NMPCNode(Node):
@@ -48,6 +63,9 @@ class NMPCNode(Node):
         self.declare_parameter('QN_y',         4.0)
         self.declare_parameter('QN_theta',     1.0)
         self.declare_parameter('odom_timeout', 1.0)
+        self.declare_parameter('imu_timeout',  1.0)
+        self.declare_parameter('fusion_rate',  50.0)
+        self.declare_parameter('yaw_fusion_alpha', 0.5)
         self.declare_parameter('ref_search_window', 10)
         self.declare_parameter('ref_heading_weight', 0.5)
 
@@ -60,8 +78,17 @@ class NMPCNode(Node):
         wheel_v_max      = self.get_parameter('wheel_v_max').value
         wheel_delta_max  = self.get_parameter('wheel_delta_max').value
         self._odom_timeout = self.get_parameter('odom_timeout').value
+        self._imu_timeout  = self.get_parameter('imu_timeout').value
+        fusion_rate        = float(self.get_parameter('fusion_rate').value)
+        self._yaw_fusion_alpha = float(self.get_parameter('yaw_fusion_alpha').value)
         self._ref_search_window  = self.get_parameter('ref_search_window').value
         self._ref_heading_weight = self.get_parameter('ref_heading_weight').value
+
+        if fusion_rate <= 0.0:
+            raise ValueError('fusion_rate must be positive')
+        if not 0.0 <= self._yaw_fusion_alpha <= 1.0:
+            raise ValueError('yaw_fusion_alpha must be in [0, 1]')
+        self._fusion_period = 1.0 / fusion_rate
 
         Q   = [self.get_parameter('Q_x').value,
                self.get_parameter('Q_y').value,
@@ -89,7 +116,7 @@ class NMPCNode(Node):
 
         self._T = len(self._ref_traj)
         self._N = N
-        self._real_traj_file = Path(real_traj_file) if real_traj_file else Path(traj_file).with_name('real_traj.npy')
+        self._real_traj_file = Path(real_traj_file) if real_traj_file else default_real_traj_file(traj_file)
         self._real_traj_file.parent.mkdir(parents=True, exist_ok=True)
         self._odom_origin = None
         self._real_traj = []
@@ -108,49 +135,131 @@ class NMPCNode(Node):
 
         # State
         self._current_state  = None   # np.ndarray (3,) or None
-        self._last_odom_time = None   # rclpy.time.Time
+        self._last_odom_time = None   # rclpy.time.Time of the last fused sensor sample
+        self._latest_odom_msg = None
+        self._latest_odom_receive_time = None
+        self._latest_imu_msg = None
+        self._latest_imu_receive_time = None
+        self._prev_odom_pose = None
+        self._last_fusion_time = None
+        self._fused_state = None
         self._ref_idx        = 0      # monotonic reference index a
         self._finished       = False
 
         # Diagnostics — rolling windows for NMPC solve time and odom latency
         self._solve_ms_window  = deque(maxlen=200)
         self._odom_lat_ms_window = deque(maxlen=200)
+        self._imu_lat_ms_window = deque(maxlen=200)
 
         # ROS interfaces
-        self.create_subscription(Odometry, '/odometry/filtered', self._cb_odom, 10)
+        self.create_subscription(Odometry, '/odom', self._cb_odom, 10)
+        self.create_subscription(Imu, '/imu/data', self._cb_imu, 10)
         self._cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.create_timer(self._fusion_period, self._fusion_loop)
         self.create_timer(dt, self._control_loop)
 
         self.get_logger().info(
             f'NMPCNode started: N={N} dt={dt}s '
+            f'fusion_rate={fusion_rate:.1f}Hz yaw_fusion_alpha={self._yaw_fusion_alpha:.2f} '
             f'wheel_base={wheel_base} wheel_v_min={wheel_v_min} '
             f'wheel_v_max={wheel_v_max} wheel_delta_max={wheel_delta_max} '
             f'traj_len={self._T} real_traj_file={self._real_traj_file}')
 
     # ------------------------------------------------------------------
     def _cb_odom(self, msg: Odometry):
-        x  = msg.pose.pose.position.x
-        y  = msg.pose.pose.position.y
-        qx = msg.pose.pose.orientation.x
-        qy = msg.pose.pose.orientation.y
-        qz = msg.pose.pose.orientation.z
-        qw = msg.pose.pose.orientation.w
-        theta = math.atan2(
-            2.0 * (qw * qz + qx * qy),
-            1.0 - 2.0 * (qy * qy + qz * qz),
-        )
-
-        now = self.get_clock().now()
-        self._current_state  = np.array([x, y, theta])
-        self._last_odom_time = now
-        self._record_real_traj_sample(self._current_state)
+        self._latest_odom_msg = msg
+        self._latest_odom_receive_time = self.get_clock().now()
 
         # Latency = (receive time on this host) - (header.stamp set by publisher)
         # Meaningful only if clocks of publisher and this host are NTP-synced.
-        stamp_ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+        stamp_ns = self._stamp_to_ns(msg.header.stamp)
         if stamp_ns > 0:
-            lat_ms = (now.nanoseconds - stamp_ns) / 1e6
+            lat_ms = (self._latest_odom_receive_time.nanoseconds - stamp_ns) / 1e6
             self._odom_lat_ms_window.append(lat_ms)
+
+    # ------------------------------------------------------------------
+    def _cb_imu(self, msg: Imu):
+        self._latest_imu_msg = msg
+        self._latest_imu_receive_time = self.get_clock().now()
+
+        stamp_ns = self._stamp_to_ns(msg.header.stamp)
+        if stamp_ns > 0:
+            lat_ms = (self._latest_imu_receive_time.nanoseconds - stamp_ns) / 1e6
+            self._imu_lat_ms_window.append(lat_ms)
+
+    # ------------------------------------------------------------------
+    def _fusion_loop(self):
+        if self._latest_odom_msg is None or self._latest_imu_msg is None:
+            self.get_logger().warn(
+                'Waiting for /odom and /imu/data...',
+                throttle_duration_sec=2.0)
+            return
+
+        now = self.get_clock().now()
+        odom_age = (now - self._latest_odom_receive_time).nanoseconds / 1e9
+        imu_age = (now - self._latest_imu_receive_time).nanoseconds / 1e9
+        if odom_age > self._odom_timeout or imu_age > self._imu_timeout:
+            self.get_logger().warn(
+                f'Sensor timeout: odom_age={odom_age:.2f}s imu_age={imu_age:.2f}s',
+                throttle_duration_sec=1.0)
+            return
+
+        odom_pose = self._odom_pose(self._latest_odom_msg)
+        if self._fused_state is None:
+            self._fused_state = odom_pose.copy()
+            self._prev_odom_pose = odom_pose
+            self._last_fusion_time = now
+            self._current_state = self._fused_state.copy()
+            self._last_odom_time = now
+            self._record_real_traj_sample(self._current_state)
+            return
+
+        dt = (now - self._last_fusion_time).nanoseconds / 1e9
+        if dt <= 0.0 or dt > 0.5:
+            dt = self._fusion_period
+
+        dx_odom = odom_pose[0] - self._prev_odom_pose[0]
+        dy_odom = odom_pose[1] - self._prev_odom_pose[1]
+        d_center = dx_odom * math.cos(odom_pose[2]) + dy_odom * math.sin(odom_pose[2])
+        d_yaw_enc = self._wrap_angle(odom_pose[2] - self._prev_odom_pose[2])
+        d_yaw_imu = self._latest_imu_msg.angular_velocity.z * dt
+        alpha = self._yaw_fusion_alpha
+        d_yaw_fused = (1.0 - alpha) * d_yaw_enc + alpha * d_yaw_imu
+
+        yaw = self._wrap_angle(self._fused_state[2] + d_yaw_fused)
+        x = self._fused_state[0] + d_center * math.cos(yaw)
+        y = self._fused_state[1] + d_center * math.sin(yaw)
+
+        self._fused_state = np.array([x, y, yaw])
+        self._prev_odom_pose = odom_pose
+        self._last_fusion_time = now
+        self._current_state = self._fused_state.copy()
+        self._last_odom_time = now
+        self._record_real_traj_sample(self._current_state)
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _stamp_to_ns(stamp) -> int:
+        return stamp.sec * 1_000_000_000 + stamp.nanosec
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _wrap_angle(angle: float) -> float:
+        return math.atan2(math.sin(angle), math.cos(angle))
+
+    # ------------------------------------------------------------------
+    @classmethod
+    def _odom_pose(cls, msg: Odometry) -> np.ndarray:
+        q = msg.pose.pose.orientation
+        yaw = math.atan2(
+            2.0 * (q.w * q.z + q.x * q.y),
+            1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+        )
+        return np.array([
+            msg.pose.pose.position.x,
+            msg.pose.pose.position.y,
+            yaw,
+        ])
 
     # ------------------------------------------------------------------
     def _record_real_traj_sample(self, state: np.ndarray):
@@ -231,7 +340,7 @@ class NMPCNode(Node):
             return
 
         if self._current_state is None:
-            self.get_logger().warn('Waiting for odometry...', throttle_duration_sec=2.0)
+            self.get_logger().warn('Waiting for fused odometry...', throttle_duration_sec=2.0)
             return
 
         elapsed = (self.get_clock().now() - self._last_odom_time).nanoseconds / 1e9

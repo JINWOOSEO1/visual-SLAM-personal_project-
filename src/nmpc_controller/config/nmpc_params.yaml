@@ -15,7 +15,7 @@ nmpc_node:
     # NMPC constrains each wheel speed, not body-frame v directly:
     # v_left = v - w*wheel_base/2, v_right = v + w*wheel_base/2.
     wheel_base:  0.150  # m
-    wheel_v_min: 0.30    # min left/right wheel speed [m/s]
+    wheel_v_min: 0.15    # min left/right wheel speed [m/s]
     wheel_v_max: 0.60   # max left/right wheel speed [m/s]
     # Max wheel speed change per NMPC step [m/s]. 0.0 disables slew constraints.
     wheel_delta_max: 0.15
@@ -36,3 +36,9 @@ nmpc_node:
 
     # Safety: stop if odometry is stale for this many seconds
     odom_timeout: 1.0
+    imu_timeout: 1.0
+
+    # Fuse wheel odometry and IMU gyro at 50 Hz:
+    # d_yaw = (1 - alpha) * d_yaw_encoder + alpha * gz * dt.
+    fusion_rate: 50.0
+    yaw_fusion_alpha: 0.5

@@ -6,8 +6,7 @@ Closed-loop wheel velocity PID controller for RC car on Raspberry Pi.
 
 Subscriptions:
   /cmd_vel              (geometry_msgs/Twist)  — target v, w from NMPC
-  /encoder/left_ticks   (std_msgs/Int32)       — cumulative left encoder ticks
-  /encoder/right_ticks  (std_msgs/Int32)       — cumulative right encoder ticks
+  /encoder/ticks        (std_msgs/Int32MultiArray) — [left_ticks, right_ticks]
 
 GPIO output (L298N):
   Left  wheel : ENA=GPIO24 (PWM), IN1=GPIO22, IN2=GPIO23
@@ -40,7 +39,7 @@ import RPi.GPIO as GPIO
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
-from std_msgs.msg import Int32
+from std_msgs.msg import Int32MultiArray
 
 from pid_velocity_controller.pid import PID
 
@@ -213,8 +212,9 @@ class PIDControllerNode(Node):
 
         # ── ROS interfaces ────────────────────────────────────────
         self.create_subscription(Twist,  '/cmd_vel',              self._cb_cmd_vel,     10)
-        self.create_subscription(Int32,  '/encoder/left_ticks',   self._cb_left_ticks,  10)
-        self.create_subscription(Int32,  '/encoder/right_ticks',  self._cb_right_ticks, 10)
+        self.create_subscription(
+            Int32MultiArray, '/encoder/ticks', self._cb_ticks, 10
+        )
 
         self.create_timer(self._dt, self._control_loop)
 
@@ -236,11 +236,17 @@ class PIDControllerNode(Node):
         self._target_vL = v - w * self._wheel_base / 2.0
         self._target_vR = v + w * self._wheel_base / 2.0
 
-    def _cb_left_ticks(self, msg: Int32):
-        self._left_ticks_cur = int(msg.data)
-
-    def _cb_right_ticks(self, msg: Int32):
-        self._right_ticks_cur = int(msg.data)
+    def _cb_ticks(self, msg: Int32MultiArray):
+        if len(msg.data) < 2:
+            msg_len = len(msg.data)
+            self.get_logger().warn(
+                f'/encoder/ticks message must contain [left, right], '
+                f'got {msg_len} values',
+                throttle_duration_sec=1.0,
+            )
+            return
+        self._left_ticks_cur = int(msg.data[0])
+        self._right_ticks_cur = int(msg.data[1])
 
     # ── Velocity measurement ──────────────────────────────────────
     def _measure_velocities(self) -> tuple:
