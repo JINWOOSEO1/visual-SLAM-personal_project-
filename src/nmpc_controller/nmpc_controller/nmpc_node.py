@@ -12,6 +12,7 @@ Reference index tracking (monotonic):
 """
 
 import math
+from pathlib import Path
 import time
 from collections import deque
 
@@ -31,12 +32,13 @@ class NMPCNode(Node):
 
         # Parameters
         self.declare_parameter('traj_file',    '')
+        self.declare_parameter('real_traj_file', '')
         self.declare_parameter('N',            20)
         self.declare_parameter('dt',           0.1)
-        self.declare_parameter('v_max',        0.3)
-        self.declare_parameter('v_min',       -0.3)   # set to 0.0 to forbid reverse
-        self.declare_parameter('v_abs_min',    0.0)   # set >0.0 to constrain abs(v)
-        self.declare_parameter('w_max',        1.5)
+        self.declare_parameter('wheel_base',   0.150)
+        self.declare_parameter('wheel_v_min',  0.1)
+        self.declare_parameter('wheel_v_max',  0.64)
+        self.declare_parameter('wheel_delta_max', 0.0)
         self.declare_parameter('Q_x',          2.0)
         self.declare_parameter('Q_y',          2.0)
         self.declare_parameter('Q_theta',      0.5)
@@ -50,12 +52,13 @@ class NMPCNode(Node):
         self.declare_parameter('ref_heading_weight', 0.5)
 
         traj_file        = self.get_parameter('traj_file').value
+        real_traj_file   = self.get_parameter('real_traj_file').value
         N                = self.get_parameter('N').value
         dt               = self.get_parameter('dt').value
-        v_max            = self.get_parameter('v_max').value
-        v_min            = self.get_parameter('v_min').value
-        v_abs_min        = self.get_parameter('v_abs_min').value
-        w_max            = self.get_parameter('w_max').value
+        wheel_base       = self.get_parameter('wheel_base').value
+        wheel_v_min      = self.get_parameter('wheel_v_min').value
+        wheel_v_max      = self.get_parameter('wheel_v_max').value
+        wheel_delta_max  = self.get_parameter('wheel_delta_max').value
         self._odom_timeout = self.get_parameter('odom_timeout').value
         self._ref_search_window  = self.get_parameter('ref_search_window').value
         self._ref_heading_weight = self.get_parameter('ref_heading_weight').value
@@ -86,12 +89,20 @@ class NMPCNode(Node):
 
         self._T = len(self._ref_traj)
         self._N = N
+        self._real_traj_file = Path(real_traj_file) if real_traj_file else Path(traj_file).with_name('real_traj.npy')
+        self._real_traj_file.parent.mkdir(parents=True, exist_ok=True)
+        self._odom_origin = None
+        self._real_traj = []
+        self._real_save_stride = 10
+        self._save_real_traj()
 
         # Build NMPC solver (CasADi NLP compiled once here)
         self.get_logger().info('Building NMPC solver (CasADi NLP) ...')
         self._solver = NMPCSolver(
             N=N, dt=dt, Q=Q, R=R, Q_N=Q_N,
-            v_max=v_max, v_min=v_min, v_abs_min=v_abs_min, w_max=w_max,
+            wheel_base=wheel_base,
+            wheel_v_min=wheel_v_min, wheel_v_max=wheel_v_max,
+            wheel_delta_max=wheel_delta_max,
         )
         self.get_logger().info('NMPC solver ready')
 
@@ -111,21 +122,28 @@ class NMPCNode(Node):
         self.create_timer(dt, self._control_loop)
 
         self.get_logger().info(
-            f'NMPCNode started: N={N} dt={dt}s v_min={v_min} v_max={v_max} '
-            f'v_abs_min={v_abs_min} w_max={w_max} '
-            f'traj_len={self._T}')
+            f'NMPCNode started: N={N} dt={dt}s '
+            f'wheel_base={wheel_base} wheel_v_min={wheel_v_min} '
+            f'wheel_v_max={wheel_v_max} wheel_delta_max={wheel_delta_max} '
+            f'traj_len={self._T} real_traj_file={self._real_traj_file}')
 
     # ------------------------------------------------------------------
     def _cb_odom(self, msg: Odometry):
         x  = msg.pose.pose.position.x
         y  = msg.pose.pose.position.y
+        qx = msg.pose.pose.orientation.x
+        qy = msg.pose.pose.orientation.y
         qz = msg.pose.pose.orientation.z
         qw = msg.pose.pose.orientation.w
-        theta = 2.0 * math.atan2(qz, qw)
+        theta = math.atan2(
+            2.0 * (qw * qz + qx * qy),
+            1.0 - 2.0 * (qy * qy + qz * qz),
+        )
 
         now = self.get_clock().now()
         self._current_state  = np.array([x, y, theta])
         self._last_odom_time = now
+        self._record_real_traj_sample(self._current_state)
 
         # Latency = (receive time on this host) - (header.stamp set by publisher)
         # Meaningful only if clocks of publisher and this host are NTP-synced.
@@ -133,6 +151,32 @@ class NMPCNode(Node):
         if stamp_ns > 0:
             lat_ms = (now.nanoseconds - stamp_ns) / 1e6
             self._odom_lat_ms_window.append(lat_ms)
+
+    # ------------------------------------------------------------------
+    def _record_real_traj_sample(self, state: np.ndarray):
+        if self._odom_origin is None:
+            self._odom_origin = state.copy()
+
+        x0, y0, theta0 = self._odom_origin
+        dx = state[0] - x0
+        dy = state[1] - y0
+        c = math.cos(-theta0)
+        s = math.sin(-theta0)
+        x_rel = c * dx - s * dy
+        y_rel = s * dx + c * dy
+        yaw_rel = math.atan2(
+            math.sin(state[2] - theta0),
+            math.cos(state[2] - theta0),
+        )
+
+        self._real_traj.append([x_rel, y_rel, yaw_rel])
+        if len(self._real_traj) == 1 or len(self._real_traj) % self._real_save_stride == 0:
+            self._save_real_traj()
+
+    # ------------------------------------------------------------------
+    def _save_real_traj(self):
+        traj = np.asarray(self._real_traj, dtype=float).reshape(-1, 3)
+        np.save(self._real_traj_file, traj)
 
     # ------------------------------------------------------------------
     def _advance_ref_idx(self, state: np.ndarray):
@@ -208,6 +252,7 @@ class NMPCNode(Node):
         if self._ref_idx >= self._T - 1 and dist_to_end < 0.15:
             self.get_logger().info('Trajectory complete — stopping')
             self._finished = True
+            self._save_real_traj()
             self._publish_zero()
             return
 
@@ -261,6 +306,7 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        node._save_real_traj()
         node.destroy_node()
         rclpy.shutdown()
 

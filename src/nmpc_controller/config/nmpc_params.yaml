@@ -5,17 +5,20 @@ nmpc_node:
     # Default value is provided by nmpc.launch.py (package share); override with
     # `traj_file:=<absolute path>` on the launch command line if needed.
     traj_file: ''
+    real_traj_file: ''
 
     # NMPC horizon
     N:   20      # prediction steps
-    dt:  0.1     # time step [s]  (= control period)
+    dt:  0.2     # time step [s]  (= control period)
 
     # Hardware constraints
-    # PWM duty 50 ~= 0.24 m/s, duty 100 ~= 0.37 m/s; keep margin inside that range.
-    v_max:      0.36   # max linear speed magnitude [m/s]
-    v_min:     -0.36   # min linear speed [m/s] — set to 0.25 to force forward-only
-    v_abs_min:  0.25   # constrain |v_linear| >= this value; 0.0 disables it
-    w_max:      1.5    # max angular speed [rad/s]
+    # NMPC constrains each wheel speed, not body-frame v directly:
+    # v_left = v - w*wheel_base/2, v_right = v + w*wheel_base/2.
+    wheel_base:  0.150  # m
+    wheel_v_min: 0.30    # min left/right wheel speed [m/s]
+    wheel_v_max: 0.60   # max left/right wheel speed [m/s]
+    # Max wheel speed change per NMPC step [m/s]. 0.0 disables slew constraints.
+    wheel_delta_max: 0.15
 
     # State tracking cost weights Q = diag(Q_x, Q_y, Q_theta)
     Q_x:     2.0
@@ -24,12 +27,12 @@ nmpc_node:
 
     # Input regularisation weights R = diag(R_v, R_w)
     R_v: 0.1
-    R_w: 0.05
+    R_w: 0.01
 
     # Terminal cost weights Q_N = diag(QN_x, QN_y, QN_theta)
     QN_x:     4.0
-    QN_y:     4.0
-    QN_theta: 1.0
+    QN_y:     8.0
+    QN_theta: 4.0
 
     # Safety: stop if odometry is stale for this many seconds
     odom_timeout: 1.0

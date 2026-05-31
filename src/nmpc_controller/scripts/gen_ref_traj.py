@@ -9,6 +9,7 @@ Supported shapes:
 
 Output: .npy file, shape (T, 3), each row = [x, y, theta]
 theta is the tangent direction of the trajectory at each point.
+The generated trajectory is normalized so the initial pose is always (0, 0, 0).
 
 Usage examples:
     python3 gen_ref_traj.py --shape circle  --radius 1.0 --speed 0.2 --dt 0.1
@@ -20,7 +21,22 @@ Usage examples:
 
 import argparse
 import math
+from pathlib import Path
 import numpy as np
+
+
+def normalize_initial_pose(traj: np.ndarray) -> np.ndarray:
+    """Transform trajectory into the initial pose frame: first row becomes (0, 0, 0)."""
+    x0, y0, theta0 = traj[0]
+    c = math.cos(-theta0)
+    s = math.sin(-theta0)
+
+    xy = traj[:, :2] - np.array([x0, y0])
+    x = c * xy[:, 0] - s * xy[:, 1]
+    y = s * xy[:, 0] + c * xy[:, 1]
+    theta = np.arctan2(np.sin(traj[:, 2] - theta0), np.cos(traj[:, 2] - theta0))
+
+    return np.column_stack([x, y, theta])
 
 
 def gen_circle(radius: float, speed: float, dt: float, n_laps: float = 1.0) -> np.ndarray:
@@ -86,6 +102,8 @@ def gen_line(length: float, speed: float, dt: float, direction: float = 0.0) -> 
 
 
 def main():
+    script_dir = Path(__file__).resolve().parent
+
     parser = argparse.ArgumentParser(description='Reference trajectory generator')
     parser.add_argument('--shape',     choices=['circle', 'figure8', 'line'],
                         default='circle')
@@ -102,7 +120,7 @@ def main():
     parser.add_argument('--direction', type=float, default=0.0,
                         help='Direction for line [rad]')
     parser.add_argument('--output',    type=str,   default='ref_traj.npy',
-                        help='Output .npy file path')
+                        help='Output .npy file path; relative paths are saved under this scripts directory')
     args = parser.parse_args()
 
     if args.shape == 'circle':
@@ -112,9 +130,15 @@ def main():
     else:
         traj = gen_line(args.length, args.speed, args.dt, args.direction)
 
-    np.save(args.output, traj)
+    traj = normalize_initial_pose(traj)
 
-    print(f'Saved: {args.output}  shape={traj.shape}')
+    output_path = Path(args.output)
+    if not output_path.is_absolute():
+        output_path = script_dir / output_path
+
+    np.save(output_path, traj)
+
+    print(f'Saved: {output_path}  shape={traj.shape}')
     print(f'  Start : x={traj[0,0]:.3f}  y={traj[0,1]:.3f}  '
           f'theta={math.degrees(traj[0,2]):.1f} deg')
     print(f'  End   : x={traj[-1,0]:.3f}  y={traj[-1,1]:.3f}  '

@@ -3,6 +3,10 @@ from glob import glob
 from setuptools import find_packages, setup
 
 package_name = 'nmpc_controller'
+trajectory_files = [
+    path for path in glob('scripts/*.npy')
+    if os.path.basename(path) != 'real_traj.npy'
+]
 
 setup(
     name=package_name,
@@ -17,7 +21,7 @@ setup(
         (os.path.join('share', package_name, 'config'),
             glob('config/*.yaml')),
         (os.path.join('share', package_name, 'scripts'),
-            glob('scripts/*.npy')),
+            trajectory_files),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

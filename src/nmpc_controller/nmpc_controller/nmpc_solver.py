@@ -9,6 +9,13 @@ class NMPCSolver:
 
     State  s = [x, y, theta]
     Input  u = [v, w]
+    Wheel speeds:
+        v_left  = v - w * wheel_base / 2
+        v_right = v + w * wheel_base / 2
+    Wheel speed slew-rate constraints:
+        |v_left[k] - v_left[k-1]| <= wheel_delta_max
+        |v_right[k] - v_right[k-1]| <= wheel_delta_max
+        with k=0 compared against the previous solve's first wheel command.
     Model:
         dx     = v * cos(theta)
         dy     = v * sin(theta)
@@ -32,20 +39,24 @@ class NMPCSolver:
         Q: list = None,
         R: list = None,
         Q_N: list = None,
-        v_max: float = 0.3,
-        w_max: float = 1.5,
-        v_min: float = -0.3,   # set to 0.0 to forbid reverse for forward-only trajectories
-        v_abs_min: float = 0.0,
+        wheel_base: float = 0.150,
+        wheel_v_min: float = 0.1,
+        wheel_v_max: float = 0.64,
+        wheel_delta_max: float = 0.0,
     ):
         self.N = N
         self.dt = dt
-        self.v_max = v_max
-        self.w_max = w_max
-        self.v_min = v_min
-        self.v_abs_min = max(0.0, float(v_abs_min))
+        self.wheel_base = float(wheel_base)
+        self.wheel_v_min = float(wheel_v_min)
+        self.wheel_v_max = float(wheel_v_max)
+        self.wheel_delta_max = float(wheel_delta_max)
 
-        if self.v_abs_min > 0.0 and max(abs(self.v_min), abs(self.v_max)) < self.v_abs_min:
-            raise ValueError('v_abs_min is larger than both v_min and v_max magnitudes')
+        if self.wheel_base <= 0.0:
+            raise ValueError('wheel_base must be positive')
+        if self.wheel_v_min > self.wheel_v_max:
+            raise ValueError('wheel_v_min must be <= wheel_v_max')
+        if self.wheel_delta_max < 0.0:
+            raise ValueError('wheel_delta_max must be non-negative')
 
         self.Q   = np.diag(Q   or [2.0, 2.0, 0.5])
         self.R   = np.diag(R   or [0.1, 0.05])
@@ -54,11 +65,10 @@ class NMPCSolver:
         self._build_problem()
 
         # Previous solution for warm starting
-        initial_v = self.v_abs_min if self.v_abs_min > 0.0 else 0.0
-        if initial_v > self.v_max:
-            initial_v = -self.v_abs_min
+        initial_v = 0.5 * (self.wheel_v_min + self.wheel_v_max)
         self._prev_u = np.tile([initial_v, 0.0], (N, 1))    # (N, 2)
         self._prev_s = None                # (N+1, 3), None on first call
+        self._prev_first_wheel = np.array([initial_v, initial_v])
 
     # ------------------------------------------------------------------
     def _rk4_step(self, s, u):
@@ -99,6 +109,9 @@ class NMPCSolver:
 
         s0_param    = opti.parameter(3)          # current state
         s_ref_param = opti.parameter(3, N + 1)   # reference segment
+        prev_wheel_param = None
+        if self.wheel_delta_max > 0.0:
+            prev_wheel_param = opti.parameter(2)
 
         # Cost
         cost = 0
@@ -118,11 +131,35 @@ class NMPCSolver:
         for k in range(N):
             opti.subject_to(S[:, k + 1] == self._rk4_step(S[:, k], U[:, k]))
 
-        # Input box constraints
-        opti.subject_to(opti.bounded(self.v_min, U[0, :], self.v_max))
-        if self.v_abs_min > 0.0:
-            opti.subject_to(U[0, :] ** 2 >= self.v_abs_min ** 2)
-        opti.subject_to(opti.bounded(-self.w_max, U[1, :], self.w_max))
+        # Wheel-speed constraints.  These define the feasible (v, w) region:
+        # v_left = v - w*L/2, v_right = v + w*L/2.
+        half_base = self.wheel_base / 2.0
+        v_left = U[0, :] - U[1, :] * half_base
+        v_right = U[0, :] + U[1, :] * half_base
+        opti.subject_to(opti.bounded(self.wheel_v_min, v_left, self.wheel_v_max))
+        opti.subject_to(opti.bounded(self.wheel_v_min, v_right, self.wheel_v_max))
+        if self.wheel_delta_max > 0.0:
+            opti.subject_to(opti.bounded(
+                -self.wheel_delta_max,
+                v_left[0] - prev_wheel_param[0],
+                self.wheel_delta_max,
+            ))
+            opti.subject_to(opti.bounded(
+                -self.wheel_delta_max,
+                v_right[0] - prev_wheel_param[1],
+                self.wheel_delta_max,
+            ))
+            for k in range(1, N):
+                opti.subject_to(opti.bounded(
+                    -self.wheel_delta_max,
+                    v_left[k] - v_left[k - 1],
+                    self.wheel_delta_max,
+                ))
+                opti.subject_to(opti.bounded(
+                    -self.wheel_delta_max,
+                    v_right[k] - v_right[k - 1],
+                    self.wheel_delta_max,
+                ))
 
         # IPOPT options — suppress stdout, limit iterations for real-time use
         opti.solver('ipopt', {
@@ -139,6 +176,14 @@ class NMPCSolver:
         self._U           = U
         self._s0_param    = s0_param
         self._s_ref_param = s_ref_param
+        self._prev_wheel_param = prev_wheel_param
+
+    # ------------------------------------------------------------------
+    def _wheel_speeds(self, u: np.ndarray) -> np.ndarray:
+        half_base = self.wheel_base / 2.0
+        v_left = u[:, 0] - u[:, 1] * half_base
+        v_right = u[:, 0] + u[:, 1] * half_base
+        return np.column_stack([v_left, v_right])
 
     # ------------------------------------------------------------------
     def solve(
@@ -162,6 +207,8 @@ class NMPCSolver:
 
         opti.set_value(self._s0_param,    current_state)
         opti.set_value(self._s_ref_param, ref_segment.T)  # (3, N+1)
+        if self._prev_wheel_param is not None:
+            opti.set_value(self._prev_wheel_param, self._prev_first_wheel)
 
         # Warm start: reuse previous solution as initial guess
         if self._prev_s is None:
@@ -178,6 +225,7 @@ class NMPCSolver:
             s_opt = sol.value(self._S).T    # (N+1, 3)
             self._prev_u = u_opt
             self._prev_s = s_opt
+            self._prev_first_wheel = self._wheel_speeds(u_opt[:1])[0]
             return u_opt, s_opt, True
 
         except Exception:
