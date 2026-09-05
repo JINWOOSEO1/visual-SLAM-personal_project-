@@ -49,9 +49,9 @@ pid_controller_node:
     derivative_tau:   0.05  # s     — derivative low-pass filter time constant
 
     # ── Control loop ─────────────────────────────────────────────
-    control_rate: 25.0   # Hz
-    # Note: encoder_node publishes at 50 Hz; PID at 25 Hz means each control
-    # step sees ~2-3 encoder messages.  vel_smooth_window averages these.
+    control_rate: 10.0   # Hz
+    # Note: encoder_node publishes at 50 Hz; PID at 10 Hz means each control
+    # step sees ~5 encoder messages.  vel_smooth_window averages these.
     vel_smooth_window: 3  # number of control steps to average velocity over
 
     # ── Safety ───────────────────────────────────────────────────
