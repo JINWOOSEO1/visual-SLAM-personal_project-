@@ -92,7 +92,7 @@ class PIDControllerNode(Node):
 
         # Safety
         self.declare_parameter('cmd_timeout',   0.5)    # s — stop if /cmd_vel stale
-        self.declare_parameter('control_rate',  25.0)   # Hz — PID loop frequency
+        self.declare_parameter('control_rate',  10.0)   # Hz — PID loop frequency
 
         # Velocity smoothing
         self.declare_parameter('vel_smooth_window', 3)   # ticks window size
