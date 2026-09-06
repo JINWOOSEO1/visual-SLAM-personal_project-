@@ -64,11 +64,16 @@ def generate_launch_description():
         'subscribe_stereo': False,
         'subscribe_scan': False,
         'subscribe_odom_info': False,
-        # IMU orientation 으로 그래프 노드에 중력 링크(gravity link)를 건다.
-        # rtabmap 노드는 IMU 를 tight-coupled VIO 로 쓰지 않는다. orientation 만
-        # 보고 자세를 중력에 정렬시키는 제약을 추가할 뿐이며, 이 제약은
-        # Optimizer/GravitySigma != 0 이고 Optimizer/Strategy 가 g2o/GTSAM 일 때만 쓰인다.
-        'subscribe_imu': True,
+        # IMU 는 EKF 가 이미 융합해 TF(odom->base_link) 로 내보내므로
+        # IMU -> EKF -> rtabmap 단일 경로를 유지한다.
+        #
+        # 실측 확인 (Humble, rtabmap_slam): 이 `rtabmap` 노드는 subscribe_imu 를
+        # 아예 사용하지 않는다. true 로 줘도 /imu/data 구독자는 늘지 않고
+        # (ekf_filter_node 하나뿐), 기동 로그의 "subscribed to (approx sync)" 목록도
+        # 이미지/카메라인포 그대로다. subscribe_imu 는 rtabmap_odom 계열
+        # (rgbd_odometry / stereo_odometry) 노드의 파라미터다.
+        # 따라서 이 값은 false 로 두는 것이 실제 동작과 일치한다.
+        'subscribe_imu': False,
 
         # 카메라/odom 타임스탬프 동기화 (서로 다른 주기 → approx)
         'approx_sync': True,
@@ -130,7 +135,6 @@ def generate_launch_description():
         # 구독자 수는 0 이다. EKF 가 publish_tf: true 이므로 동작에는 문제없고,
         # 이 remap 은 odom_frame_id 를 비울 경우를 위해 남겨둔다.
         ('odom',            '/odometry/filtered'),
-        ('imu',             '/imu/data'),
     ]
 
     # Wi-Fi 대역폭 절감: Pi 가 보내는 /camera/image_raw/compressed 를
