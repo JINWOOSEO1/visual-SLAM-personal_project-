@@ -114,6 +114,7 @@ MPU6050을 I2C로 직접 읽어 IMU 데이터를 퍼블리시한다.
 | `ekf.launch.py` | Pi | `robot_localization` EKF 단독 |
 | `sensor_tf.launch.py` | Pi | `base_link` → `camera_link` / `camera` / `imu_link` static TF |
 | `rtabmap.launch.py` | **PC** | 이미지 decompress + RTAB-Map + 뷰어 |
+| `rviz.launch.py` | **PC** | RViz2 로 맵/궤적/루프클로저 실시간 확인 |
 | `teleop.launch.py` | 아무데나 | `teleop_twist_keyboard` |
 
 ## 빌드
@@ -164,11 +165,45 @@ ros2 launch rc_car_bringup rtabmap.launch.py rtabmap_viz:=false   # GUI 없이
 Wi-Fi 대역폭 때문에 raw 이미지는 17 fps까지 떨어져서, Pi는 compressed만 보내고
 PC가 `image_transport/republish` 로 풀어서 RTAB-Map에 넣는다.
 
-### 4. 조종
+### 4. PC — RViz2 로 실시간 확인 (선택)
 
 ```bash
-ros2 launch rc_car_bringup teleop.launch.py
+ros2 launch rc_car_bringup rviz.launch.py
 ```
+
+`rtabmap.launch.py` 와 별도 터미널에서 띄운다. RViz 를 껐다 켜도 SLAM 은 계속 돈다.
+
+| Display | 토픽 | 보이는 것 |
+|---|---|---|
+| Map | `/map` | 점유 격자 (2D 맵) |
+| MapCloud | `/mapData` | 그래프에 누적된 포인트클라우드 |
+| MapGraph | `/mapGraph` | 노드/링크 그래프 — **루프 클로저가 여기 선으로 나타난다** |
+| Info | `/info` | 루프 클로저 검출 상태 |
+| Map Cloud | `/cloud_map` | 조밀 클라우드 (`gen_depth` 결과) |
+| Odometry (EKF) | `/odometry/filtered` | EKF 추정 위치 |
+| SLAM Path | `/mapPath` | 최적화된 궤적 |
+| Camera | `/camera/image_decompressed` | 카메라 원본 |
+
+Fixed Frame 은 `map` 이다. 첫 키프레임이 등록되기 전에는
+`No transform from [odom] to [map]` 경고가 뜨는데 정상이다.
+
+> RTAB-Map 자체 GUI(`rtabmap_viz`)는 `rtabmap.launch.py` 가 기본으로 같이 띄운다.
+> 특징점 매칭과 루프 클로저 후보를 이미지 단위로 보려면 그쪽이 낫고,
+> 맵과 TF 를 로봇 좌표계에서 보려면 RViz 가 낫다. 둘 다 켜도 된다.
+> RViz 만 쓸 거면 `ros2 launch rc_car_bringup rtabmap.launch.py rtabmap_viz:=false`.
+
+### 5. 조종
+
+```bash
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+```
+
+> ⚠️ `ros2 launch rc_car_bringup teleop.launch.py` 는 동작하지 않는다.
+> `teleop_twist_keyboard` 는 기동 시 `termios.tcgetattr(sys.stdin)` 으로 터미널
+> 설정을 읽는데, `ros2 launch` 는 자식 프로세스의 stdin 을 터미널에 연결해주지
+> 않아서 `termios.error: (25, 'Inappropriate ioctl for device')` 로 죽는다.
+> (`emulate_tty=True` 는 stdout/stderr 에만 pty 를 붙이므로 해결되지 않는다.)
+> 키 입력을 받는 노드이므로 반드시 `ros2 run` 으로 띄워야 한다.
 
 > `teleop_twist_keyboard` 는 현재 Pi에 설치돼 있지 않다. 먼저 설치해야 한다:
 > `sudo apt install ros-humble-teleop-twist-keyboard`
