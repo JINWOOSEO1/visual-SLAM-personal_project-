@@ -10,20 +10,30 @@ RTAB-Map Monocular Visual SLAM launch (PC 측 실행)
 Wi-Fi 대역폭 이슈로 raw 이미지는 17fps 까지 떨어지므로 compressed 를
 PC 측에서 수신 → image_transport/republish 로 decompress → rtabmap 입력.
 
-출력:
-    /rtabmap/mapData, /rtabmap/cloud_map, TF map → odom
+출력 (노드 네임스페이스가 없으므로 토픽은 전부 루트에 있다):
+    /mapData, /cloud_map, /map, /mapGraph, /mapPath, /info
+    TF map → odom
+
+이 launch 하나로 decompress + SLAM + 뷰어가 같이 뜬다.
 
 사용법 (PC):
     ros2 launch rc_car_bringup rtabmap.launch.py
-    # GUI 없이 실행하려면:
-    ros2 launch rc_car_bringup rtabmap.launch.py rtabmap_viz:=false
+
+    # 뷰어 선택 (기본은 RViz2 만)
+    ros2 launch rc_car_bringup rtabmap.launch.py rviz:=false          # 뷰어 없이
+    ros2 launch rc_car_bringup rtabmap.launch.py rtabmap_viz:=true    # RTAB-Map GUI 도 같이
+
+RViz 만 따로 껐다 켜고 싶으면 rviz:=false 로 띄운 뒤
+별도 터미널에서 `ros2 launch rc_car_bringup rviz.launch.py` 를 쓰면 된다.
 """
 
 import os
 
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -32,7 +42,10 @@ def generate_launch_description():
 
     use_sim_time = LaunchConfiguration('use_sim_time')
     rtabmap_viz = LaunchConfiguration('rtabmap_viz')
+    rviz = LaunchConfiguration('rviz')
     database_path = LaunchConfiguration('database_path')
+
+    bringup_dir = get_package_share_directory('rc_car_bringup')
 
     default_db_path = os.path.expanduser('~/.ros/rtabmap.db')
 
@@ -153,9 +166,27 @@ def generate_launch_description():
         condition=IfCondition(rtabmap_viz),
     )
 
+    # RViz2 (config/slam.rviz). rviz.launch.py 를 그대로 재사용해서
+    # 설정 경로가 두 군데로 갈라지지 않게 한다.
+    rviz_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(bringup_dir, 'launch', 'rviz.launch.py')
+        ),
+        condition=IfCondition(rviz),
+    )
+
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='false'),
-        DeclareLaunchArgument('rtabmap_viz', default_value='true'),
+        DeclareLaunchArgument(
+            'rviz',
+            default_value='true',
+            description='RViz2 를 같이 띄운다 (config/slam.rviz)',
+        ),
+        DeclareLaunchArgument(
+            'rtabmap_viz',
+            default_value='false',
+            description='RTAB-Map 자체 GUI 도 같이 띄운다 (뷰어 2개가 된다)',
+        ),
         DeclareLaunchArgument(
             'database_path',
             default_value=default_db_path,
@@ -164,4 +195,5 @@ def generate_launch_description():
         image_republish_node,
         rtabmap_node,
         rtabmap_viz_node,
+        rviz_launch,
     ])

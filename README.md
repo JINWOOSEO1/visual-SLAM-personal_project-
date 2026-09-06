@@ -113,8 +113,8 @@ MPU6050을 I2C로 직접 읽어 IMU 데이터를 퍼블리시한다.
 | `sensors.launch.py` | Pi | 카메라 + IMU + 엔코더/오도메트리 + static TF + EKF (모터 제외) |
 | `ekf.launch.py` | Pi | `robot_localization` EKF 단독 |
 | `sensor_tf.launch.py` | Pi | `base_link` → `camera_link` / `camera` / `imu_link` static TF |
-| `rtabmap.launch.py` | **PC** | 이미지 decompress + RTAB-Map + 뷰어 |
-| `rviz.launch.py` | **PC** | RViz2 로 맵/궤적/루프클로저 실시간 확인 |
+| `rtabmap.launch.py` | **PC** | 이미지 decompress + RTAB-Map + RViz2 (한 번에) |
+| `rviz.launch.py` | **PC** | RViz2 단독 (rtabmap.launch.py 가 내부적으로 포함) |
 | `teleop.launch.py` | 아무데나 | `teleop_twist_keyboard` |
 
 ## 빌드
@@ -155,23 +155,39 @@ ros2 launch pid_velocity_controller pid_controller.launch.py   # closed-loop (�
 ros2 launch motor_controller motor.launch.py                   # open-loop
 ```
 
-### 3. PC — SLAM
+### 3. PC — SLAM + 시각화
 
 ```bash
 ros2 launch rc_car_bringup rtabmap.launch.py
-ros2 launch rc_car_bringup rtabmap.launch.py rtabmap_viz:=false   # GUI 없이
 ```
+
+이 하나로 이미지 decompress + RTAB-Map + RViz2 가 같이 뜬다.
+
+| 인자 | 기본 | 설명 |
+|---|---|---|
+| `rviz` | `true` | RViz2 (`config/slam.rviz`) |
+| `rtabmap_viz` | `false` | RTAB-Map 자체 GUI — 켜면 창이 2개가 된다 |
+| `database_path` | `~/.ros/rtabmap.db` | 맵 DB 경로 |
+
+```bash
+ros2 launch rc_car_bringup rtabmap.launch.py rviz:=false          # 뷰어 없이 (헤드리스)
+ros2 launch rc_car_bringup rtabmap.launch.py rtabmap_viz:=true    # 특징점/루프클로저 내부까지
+```
+
+`rtabmap_viz` 는 특징점 매칭과 루프 클로저 후보 이미지 쌍을 보여주므로
+SLAM 이 왜 안 붙는지 디버깅할 때 켠다. 평소에는 RViz 만으로 충분하다.
 
 Wi-Fi 대역폭 때문에 raw 이미지는 17 fps까지 떨어져서, Pi는 compressed만 보내고
 PC가 `image_transport/republish` 로 풀어서 RTAB-Map에 넣는다.
 
-### 4. PC — RViz2 로 실시간 확인 (선택)
+### 4. RViz2 에 보이는 것
+
+위 3번에서 RViz 가 이미 같이 떴다. SLAM 을 계속 돌린 채 RViz 만 껐다 켜고 싶으면
+`rviz:=false` 로 띄운 뒤 별도 터미널에서:
 
 ```bash
 ros2 launch rc_car_bringup rviz.launch.py
 ```
-
-`rtabmap.launch.py` 와 별도 터미널에서 띄운다. RViz 를 껐다 켜도 SLAM 은 계속 돈다.
 
 | Display | 토픽 | 보이는 것 |
 |---|---|---|
@@ -187,10 +203,8 @@ ros2 launch rc_car_bringup rviz.launch.py
 Fixed Frame 은 `map` 이다. 첫 키프레임이 등록되기 전에는
 `No transform from [odom] to [map]` 경고가 뜨는데 정상이다.
 
-> RTAB-Map 자체 GUI(`rtabmap_viz`)는 `rtabmap.launch.py` 가 기본으로 같이 띄운다.
-> 특징점 매칭과 루프 클로저 후보를 이미지 단위로 보려면 그쪽이 낫고,
-> 맵과 TF 를 로봇 좌표계에서 보려면 RViz 가 낫다. 둘 다 켜도 된다.
-> RViz 만 쓸 거면 `ros2 launch rc_car_bringup rtabmap.launch.py rtabmap_viz:=false`.
+> 다른 설정 파일을 쓰려면 `rviz_config:=/경로/my.rviz` 로 넘긴다.
+> 이 인자는 `rtabmap.launch.py` 에서도 그대로 받는다.
 
 ### 5. 조종
 
