@@ -5,7 +5,7 @@ RTAB-Map Monocular Visual SLAM launch (PC 측 실행)
     /camera/image_raw/compressed  (sensor_msgs/CompressedImage, 30fps)
     /camera/camera_info           (sensor_msgs/CameraInfo)
     /odometry/filtered            (nav_msgs/Odometry, EKF 출력)
-    /imu/data                     (sensor_msgs/Imu, madgwick)
+    /imu/data                     (sensor_msgs/Imu, imu_kalman_node — orientation 포함)
 
 Wi-Fi 대역폭 이슈로 raw 이미지는 17fps 까지 떨어지므로 compressed 를
 PC 측에서 수신 → image_transport/republish 로 decompress → rtabmap 입력.
@@ -64,13 +64,16 @@ def generate_launch_description():
         'subscribe_stereo': False,
         'subscribe_scan': False,
         'subscribe_odom_info': False,
-        # IMU 는 이미 EKF 가 /odometry/filtered 에 융합했으므로 rtabmap 단에선 구독 불필요
-        'subscribe_imu': False,
+        # IMU orientation 으로 그래프 노드에 중력 링크(gravity link)를 건다.
+        # rtabmap 노드는 IMU 를 tight-coupled VIO 로 쓰지 않는다. orientation 만
+        # 보고 자세를 중력에 정렬시키는 제약을 추가할 뿐이며, 이 제약은
+        # Optimizer/GravitySigma != 0 이고 Optimizer/Strategy 가 g2o/GTSAM 일 때만 쓰인다.
+        'subscribe_imu': True,
 
         # 카메라/odom 타임스탬프 동기화 (서로 다른 주기 → approx)
         'approx_sync': True,
         'approx_sync_max_interval': 0.05,
-        'queue_size': 30,
+        'sync_queue_size': 30,   # 'queue_size' 는 deprecated (기동 시 WARN)
         'qos_image': 2,            # 2 = BEST_EFFORT (Wi-Fi 손실 허용)
         'qos_camera_info': 2,
         'qos_imu': 2,
@@ -87,8 +90,10 @@ def generate_launch_description():
 
         # ── 평면 주행 (2D SLAM) ─────────────────────────────────
         'Reg/Force3DoF': 'true',
-        'Optimizer/Slam2D': 'true',
-        'Optimizer/Strategy': '1',          # 1 = g2o
+        # NOTE: Optimizer/Slam2D 는 이 rtabmap 버전(Humble)에 존재하지 않는다.
+        # `ros2 run rtabmap_slam rtabmap --params` 389개 중 없음 → 설정해도 무시되고
+        # 경고만 남으므로 제거했다. 평면 제약은 Reg/Force3DoF + RGBD/ForceOdom3DoF 가 담당한다.
+        'Optimizer/Strategy': '1',          # 1 = g2o (중력 제약 지원)
         'RGBD/OptimizeFromGraphEnd': 'false',
 
         # ── 단안 모드 (스케일은 wheel odom 으로 해결) ────────────
@@ -120,7 +125,12 @@ def generate_launch_description():
     rtabmap_remappings = [
         ('rgb/image',       '/camera/image_decompressed'),
         ('rgb/camera_info', '/camera/camera_info'),
+        # NOTE: odom_frame_id 가 설정돼 있으면 rtabmap 은 odom 토픽 대신
+        # TF(odom->base_link) 를 쓴다. 실측 확인 결과 /odometry/filtered 의
+        # 구독자 수는 0 이다. EKF 가 publish_tf: true 이므로 동작에는 문제없고,
+        # 이 remap 은 odom_frame_id 를 비울 경우를 위해 남겨둔다.
         ('odom',            '/odometry/filtered'),
+        ('imu',             '/imu/data'),
     ]
 
     # Wi-Fi 대역폭 절감: Pi 가 보내는 /camera/image_raw/compressed 를
