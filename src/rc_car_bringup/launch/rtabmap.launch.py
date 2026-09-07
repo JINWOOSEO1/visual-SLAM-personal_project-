@@ -56,7 +56,12 @@ def generate_launch_description():
 
         # 프레임 / 토픽 구독 모드
         'frame_id': 'base_link',
-        'odom_frame_id': 'odom',
+        # odom_frame_id 를 설정하면 rtabmap 이 odom 토픽 대신 TF(odom->base_link)
+        # 를 lookup 한다. TF 는 지연 허용치가 없어 Wi-Fi 로 TF 가 조금만 밀려도
+        # "extrapolation into the future" 로 매 프레임이 폐기된다 (실측: 지연이
+        # 0.6s -> 5.2s 로 계속 증가, 90초간 4프레임만 처리).
+        # 비워두면 /odometry/filtered 를 토픽으로 구독해 approx_sync 큐가
+        # 지연을 흡수하고, 아래 qos_odom(BEST_EFFORT) 도 비로소 적용된다.
         'map_frame_id': 'map',
         'subscribe_depth': False,
         'subscribe_rgb': True,
@@ -77,7 +82,10 @@ def generate_launch_description():
 
         # 카메라/odom 타임스탬프 동기화 (서로 다른 주기 → approx)
         'approx_sync': True,
-        'approx_sync_max_interval': 0.05,
+        # odom 이 sync 대상에 추가되므로 50ms 는 너무 좁다. Wi-Fi 지터를
+        # 감안해 완화한다 (좁으면 sync 가 성립하지 않아 "Did not receive
+        # data since 5 seconds" 가 반복된다).
+        'approx_sync_max_interval': 0.2,
         'sync_queue_size': 30,   # 'queue_size' 는 deprecated (기동 시 WARN)
         'qos_image': 2,            # 2 = BEST_EFFORT (Wi-Fi 손실 허용)
         'qos_camera_info': 2,
@@ -130,10 +138,8 @@ def generate_launch_description():
     rtabmap_remappings = [
         ('rgb/image',       '/camera/image_decompressed'),
         ('rgb/camera_info', '/camera/camera_info'),
-        # NOTE: odom_frame_id 가 설정돼 있으면 rtabmap 은 odom 토픽 대신
-        # TF(odom->base_link) 를 쓴다. 실측 확인 결과 /odometry/filtered 의
-        # 구독자 수는 0 이다. EKF 가 publish_tf: true 이므로 동작에는 문제없고,
-        # 이 remap 은 odom_frame_id 를 비울 경우를 위해 남겨둔다.
+        # odom_frame_id 를 비워 rtabmap/rtabmap_viz 가 TF 대신 이 토픽을
+        # 구독하게 했으므로 이 remap 이 실제로 동작한다.
         ('odom',            '/odometry/filtered'),
     ]
 
@@ -169,11 +175,15 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time': use_sim_time,
             'frame_id': 'base_link',
-            'odom_frame_id': 'odom',
+            # rtabmap 노드와 동일한 이유로 odom_frame_id 를 비운다.
             'subscribe_depth': False,
             'subscribe_rgb': True,
             'subscribe_odom_info': False,
             'approx_sync': True,
+            'approx_sync_max_interval': 0.2,
+            'qos_image': 2,
+            'qos_camera_info': 2,
+            'qos_odom': 2,
             'queue_size': 30,
         }],
         remappings=rtabmap_remappings,
